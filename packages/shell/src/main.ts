@@ -14,6 +14,8 @@ import { createBackend, type TransportKind } from "./backend/client";
 import type { BackendEvent } from "./backend/types";
 import type { ShellBridge, TabView } from "./extensions/api";
 import { ExtensionHost } from "./extensions/registry";
+import { extensionIdFromUrl, install as installFromStore } from "./extensions/webstore";
+import { Bookmarks } from "./bookmarks";
 import { History } from "./history";
 import { resolve as resolveOmnibox } from "./omnibox";
 import { TabStore } from "./tabs";
@@ -24,10 +26,11 @@ const CHROME_HEIGHT = 76;
 const DEBUG_EVENTS = Bun.env.BUNSEN_DEBUG_EVENTS === "1";
 const HOME = Bun.env.BUNSEN_HOME_PAGE ?? "https://duckduckgo.com";
 const BUILD = join(import.meta.dir, "../../../target/debug");
-// `webkit` is the default because it is the one with a chrome UI. `blitz`
-// renders with Stylo/Taffy/Vello and answers the identical protocol, but does
-// not composite the chrome yet — see packages/render-blitz/src/lib.rs.
-const ENGINE = Bun.env.BUNSEN_ENGINE ?? "webkit";
+// Blitz is the default: it is the engine this project is aimed at, and the
+// one whose DOM we own. It does not composite the chrome UI yet, so there is
+// no tab strip or omnibox on it — BUNSEN_ENGINE=webkit is the way back to a
+// browser with controls while that is built.
+const ENGINE = Bun.env.BUNSEN_ENGINE ?? "blitz";
 const BACKEND_PATH =
   Bun.env.BUNSEN_BACKEND_PATH ?? join(BUILD, "libbunsen_render_webkit.so");
 // Each engine reads its own override. A single BUNSEN_HOST_PATH used to win
@@ -57,6 +60,7 @@ const EXTENSIONS_DIR = Bun.env.BUNSEN_EXTENSIONS_DIR ?? join(PROFILE, "extension
 // History belongs to the profile like everything else; it used to land in
 // the default XDG path regardless of BUNSEN_PROFILE.
 const history = new History(join(PROFILE, "history.db"));
+const bookmarks = new Bookmarks(join(PROFILE, "bookmarks.db"));
 const tabs = new TabStore();
 const chromeSockets = new Set<ServerWebSocket<unknown>>();
 
@@ -130,6 +134,7 @@ for (const extension of extensionHost.extensions) {
     console.error(`bunsen: ${extension.id} background worker: ${err}`);
   });
 }
+syncContentScripts();
 
 openTab(HOME);
 console.log(
@@ -145,6 +150,7 @@ function handleChrome(ws: ServerWebSocket<unknown>, msg: any): void {
       const id = active;
       if (id === null) return void openTab(resolveOmnibox(msg.url));
       const url = resolveOmnibox(msg.url);
+      if (maybeInstallExtension(url, id)) return;
       tabs.update(id, { url, error: null });
       backend.send({ op: "tab_navigate", id, url });
       pushState();
@@ -191,6 +197,53 @@ function pushState(): void {
 }
 
 // ------------------------------------------------------------------- tabs
+
+/**
+ * Navigating to a Chrome Web Store listing installs the extension instead.
+ *
+ * The store's own pages need a Google-signed browser to render the install
+ * button, so following the link would only ever show a page that cannot do
+ * anything. Treating the URL as the install command is the honest behaviour:
+ * the address is the identifier, and installing is what the user meant.
+ *
+ * Returns true if the URL was handled as an install.
+ */
+function maybeInstallExtension(url: string, tabId: number | null): boolean {
+  const id = extensionIdFromUrl(url);
+  if (!id) return false;
+
+  backend.send({ op: "status", text: `Installing ${id}…` });
+  void installFromStore(id, EXTENSIONS_DIR)
+    .then(async ({ path }) => {
+      const { extension, errors, warnings } = extensionHost.load(path, id);
+      for (const warning of warnings) console.warn(`bunsen: ${id}: ${warning}`);
+      if (!extension) {
+        throw new Error(errors.join("; ") || "manifest rejected");
+      }
+      await extensionHost.startBackground(extension).catch((err) => {
+        // A broken background worker is worth reporting but does not undo the
+        // install: content scripts and the manifest are still usable.
+        console.error(`bunsen: ${id} background worker: ${err}`);
+      });
+      syncContentScripts();
+      backend.send({
+        op: "status",
+        text: `Installed ${extension.manifest.name} ${extension.manifest.version}`,
+      });
+    })
+    .catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`bunsen: install ${id} failed: ${message}`);
+      backend.send({ op: "status", text: `Install failed: ${message}` });
+    });
+
+  // Leave the tab where it was rather than navigating to a page that cannot
+  // work; a brand new tab has nowhere to stay, so send it home.
+  if (tabId !== null && tabs.get(tabId)?.url === "") {
+    backend.send({ op: "tab_navigate", id: tabId, url: HOME });
+  }
+  return true;
+}
 
 function openTab(url: string, opener?: number): void {
   const tab = tabs.create(url, opener);
@@ -245,7 +298,36 @@ function onBackendEvent(ev: BackendEvent): void {
     case "tab_requested":
       // target=_blank / window.open: the backend declined to make a view, so
       // the new tab is an ordinary shell-owned tab.
-      openTab(ev.url, ev.opener);
+      if (maybeInstallExtension(ev.url, null)) return;
+      // ctrl-t asks for a tab without saying where; that means the home page.
+      openTab(ev.url || HOME, ev.opener);
+      return;
+    case "tab_close_request":
+      // The chrome bar's close button lives in the renderer, so closing is a
+      // request rather than a fact: tab lifetime stays the shell's.
+      closeTab(ev.id);
+      return;
+    case "bookmark_request": {
+      const tab = tabs.get(ev.id);
+      if (tab) {
+        bookmarks.add(tab.url, tab.title);
+        backend.send({ op: "status", text: `Bookmarked ${tab.title || tab.url}` });
+      }
+      return;
+    }
+    case "navigate_request": {
+      // The renderer's omnibox hands us raw text; resolving it here is what
+      // keeps one address-bar heuristic for the whole browser.
+      const url = resolveOmnibox(ev.text);
+      if (!maybeInstallExtension(url, ev.id)) {
+        tabs.update(ev.id, { url, error: null });
+        backend.send({ op: "tab_navigate", id: ev.id, url });
+      }
+      pushState();
+      return;
+    }
+    case "page_event":
+      void onPageEvent(ev.id, ev.payload);
       return;
     case "window_closed":
       return shutdown();
@@ -253,6 +335,53 @@ function onBackendEvent(ev: BackendEvent): void {
       return;
   }
   pushState();
+}
+
+/**
+ * A content script talking to its extension.
+ *
+ * Two shapes cross: `api` is a direct `browser.*` call, permission-checked
+ * exactly as a background call is, and `sendMessage` is delivered to the
+ * extension's background listeners. Both carry a ticket, and both must be
+ * answered even on failure — a content script awaiting a reply that never
+ * comes is a hung page.
+ */
+async function onPageEvent(tabId: number, raw: string): Promise<void> {
+  let payload: any;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (!payload?.ticket || typeof payload.ext !== "string") return;
+
+  const reply = (value: unknown) =>
+    backend.send({
+      op: "to_page",
+      id: tabId,
+      payload: JSON.stringify({ ticket: payload.ticket, value }),
+    });
+
+  try {
+    if (payload.kind === "api") {
+      reply(await extensionHost.callApi(payload.ext, payload.method, payload.params));
+    } else if (payload.kind === "sendMessage") {
+      const sender = { tab: { id: tabId }, id: payload.ext };
+      reply(await extensionHost.sendToBackground(payload.ext, payload.message, sender));
+    } else {
+      reply({ error: `unknown page message: ${payload.kind}` });
+    }
+  } catch (err) {
+    reply({ error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/** Tell the renderer which content scripts to inject, and where. */
+function syncContentScripts(): void {
+  backend.send({
+    op: "set_content_scripts",
+    json: JSON.stringify(extensionHost.contentScripts()),
+  });
 }
 
 /** What the extension APIs are allowed to do to the browser. */
@@ -302,8 +431,16 @@ function shellBridge(): ShellBridge {
   };
 }
 
+let shuttingDown = false;
+
 function shutdown(): void {
+  // Re-entrant on a second signal, and stopping the backend twice would
+  // double-free the handle.
+  if (shuttingDown) return;
+  shuttingDown = true;
+
   extensionHost.stop();
+  bookmarks.close();
   backend.flush();
   backend.stop();
   history.close();
@@ -311,4 +448,11 @@ function shutdown(): void {
   process.exit(0);
 }
 
-process.on("SIGINT", shutdown);
+// SIGTERM matters as much as SIGINT: it is what a service manager, a
+// `timeout`, and a compositor closing the session all send. Without it the JS
+// VM was torn down while the renderer's threads were still live and the
+// threadsafe wakeup callback still had somewhere to call, which crashed Bun
+// with SIGILL instead of exiting.
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(signal, shutdown);
+}

@@ -14,15 +14,21 @@ bunsen-protocol = { path = "../protocol" }
 
 blitz-dom = "0.3.0-beta.1"
 blitz-html = "0.3.0-beta.1"
-blitz-net = "0.3.0-beta.1"
+# `cookies` keeps a session alive across requests, which is the difference
+# between a renderer and a browser: without it nothing stays logged in.
+# `http2` and `cache` are what real sites expect of a client.
+blitz-net = { version = "0.3.0-beta.1", features = ["cookies", "http2", "cache"] }
 blitz-shell = "0.3.0-beta.1"
 blitz-traits = "0.3.0-beta.1"
 anyrender_vello = "0.12"
 winit = "=0.31.0-beta.2"
+winit-wayland = "=0.31.0-beta.2"
 
 async-channel = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 url = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [[bin]]
 name = "bunsen-render-blitz-host"

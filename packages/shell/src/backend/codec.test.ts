@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 import { expect, test } from "bun:test";
 
-import { decodeEvents, encodeCommands } from "./codec";
+import { decodeEvents, encodeCommands, EV, OP } from "./codec";
 import type { BackendEvent, Command } from "./types";
 
 /** Mirror of the Rust encoder, so decodeEvents can be tested standalone. */
@@ -88,4 +88,35 @@ test("malformed input is rejected rather than guessed at", () => {
   expect(() => decodeEvents(new Uint8Array([1, 0, 0, 0]))).toThrow();
   expect(() => decodeEvents(new Uint8Array([0, 0, 0, 0, 9]))).toThrow(/trailing/);
   expect(() => decodeEvents(new Uint8Array([1, 0, 0, 0, 0xff, 0xff]))).toThrow(/unknown/);
+});
+
+/**
+ * The two halves of the wire format live in different languages, and nothing
+ * but discipline keeps them in step. Discipline failed once already: the Rust
+ * side grew set_content_scripts/status/to_page and the TypeScript side did
+ * not, so every command batch encoded opcode 0 and the renderer dropped it —
+ * which presented as a browser that opened a blank window and loaded nothing.
+ * This reads the Rust table and refuses to let that happen quietly again.
+ */
+test("the Rust and TypeScript opcode tables agree", async () => {
+  const rust = await Bun.file(
+    new URL("../../../protocol/src/codec.rs", import.meta.url).pathname,
+  ).text();
+
+  const tableOf = (module: "op" | "ev") => {
+    const block = new RegExp(`pub mod ${module} \\{([\\s\\S]*?)\\n\\}`).exec(rust);
+    if (!block) throw new Error(`could not find 'pub mod ${module}' in codec.rs`);
+    const entries: Record<string, number> = {};
+    for (const m of block[1].matchAll(/pub const (\w+): u16 = (\d+);/g)) {
+      entries[m[1].toLowerCase()] = Number(m[2]);
+    }
+    return entries;
+  };
+
+  expect(OP).toEqual(tableOf("op"));
+
+  // Events are keyed by number on the TypeScript side, so compare the inverse.
+  const tsEvents: Record<string, number> = {};
+  for (const [code, name] of Object.entries(EV)) tsEvents[name] = Number(code);
+  expect(tsEvents).toEqual(tableOf("ev"));
 });

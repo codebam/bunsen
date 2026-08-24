@@ -62,6 +62,7 @@ export class ExtensionApi {
    * an extension should be able to feature-detect us honestly.
    */
   async dispatch(ext: Extension, method: string, params: any): Promise<unknown> {
+    ({ method, params } = normalize(method, params));
     switch (method) {
       // ------------------------------------------------------------ storage
       case "storage.get":
@@ -130,6 +131,32 @@ export class ExtensionApi {
     if (!ext.manifest.permissions.has(permission as any)) {
       throw new PermissionError(permission);
     }
+  }
+}
+
+/**
+ * Storage has two spellings on the wire.
+ *
+ * A background worker's shim already flattens `storage.local.get(keys)` into
+ * `storage.get` with an area, but a content script's sandbox sends the dotted
+ * form straight through. Both are legitimate callers of the same API, so the
+ * translation belongs here rather than being duplicated — and getting it
+ * wrong reads as "not implemented" for an API that exists, which is a
+ * confusing lie to hand an extension author.
+ */
+function normalize(method: string, params: any): { method: string; params: any } {
+  const storage = /^storage\.(local|session|sync)\.(\w+)$/.exec(method);
+  if (!storage) return { method, params };
+
+  const [, areaName, op] = storage;
+  switch (op) {
+    case "set":
+      return { method: "storage.set", params: { area: areaName, items: params } };
+    case "get":
+    case "remove":
+      return { method: `storage.${op}`, params: { area: areaName, keys: params ?? null } };
+    default:
+      return { method: `storage.${op}`, params: { area: areaName } };
   }
 }
 

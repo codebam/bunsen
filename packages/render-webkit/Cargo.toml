@@ -15,6 +15,7 @@ gtk = { package = "gtk4", version = "0.9", features = ["v4_10"] }
 webkit6 = "0.4"
 glib = "0.20"
 async-channel = "2"
+serde_json = "1"
 
 [[bin]]
 name = "bunsen-render-host"

@@ -13,7 +13,9 @@
 //! the shell drives it headlessly. That is why it is not the default.
 
 mod app;
+mod chrome;
 mod fetch;
+mod js;
 mod tabs;
 
 use std::sync::Arc;

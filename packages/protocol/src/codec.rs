@@ -30,6 +30,9 @@ pub mod op {
     pub const TAB_STOP: u16 = 8;
     pub const CHROME_HEIGHT: u16 = 9;
     pub const APP_QUIT: u16 = 10;
+    pub const SET_CONTENT_SCRIPTS: u16 = 11;
+    pub const STATUS: u16 = 12;
+    pub const TO_PAGE: u16 = 13;
 }
 
 pub mod ev {
@@ -43,6 +46,10 @@ pub mod ev {
     pub const TAB_FAVICON: u16 = 8;
     pub const TAB_REQUESTED: u16 = 9;
     pub const WINDOW_CLOSED: u16 = 10;
+    pub const TAB_CLOSE_REQUEST: u16 = 11;
+    pub const PAGE_EVENT: u16 = 12;
+    pub const BOOKMARK_REQUEST: u16 = 13;
+    pub const NAVIGATE_REQUEST: u16 = 14;
 }
 
 /// A batch holding a single AppQuit, which the ABI's stop path needs to send
@@ -132,6 +139,12 @@ pub fn decode_commands(buf: &[u8]) -> Result<Vec<Command>, DecodeError> {
             },
             op::TAB_STOP => Command::TabStop { id: r.u32()? },
             op::CHROME_HEIGHT => Command::ChromeHeight { px: r.i32()? },
+            op::SET_CONTENT_SCRIPTS => Command::SetContentScripts { json: r.str()? },
+            op::STATUS => Command::Status { text: r.str()? },
+            op::TO_PAGE => Command::ToPage {
+                id: r.u32()?,
+                payload: r.str()?,
+            },
             op::APP_QUIT => Command::AppQuit,
             _ => return Err(DecodeError("unknown opcode")),
         });
@@ -218,6 +231,24 @@ pub fn encode_events(events: &[Event]) -> Vec<u8> {
                 w.str(url);
             }
             Event::WindowClosed => w.u16(ev::WINDOW_CLOSED),
+            Event::TabCloseRequest { id } => {
+                w.u16(ev::TAB_CLOSE_REQUEST);
+                w.u32(*id);
+            }
+            Event::PageEvent { id, payload } => {
+                w.u16(ev::PAGE_EVENT);
+                w.u32(*id);
+                w.str(payload);
+            }
+            Event::NavigateRequest { id, text } => {
+                w.u16(ev::NAVIGATE_REQUEST);
+                w.u32(*id);
+                w.str(text);
+            }
+            Event::BookmarkRequest { id } => {
+                w.u16(ev::BOOKMARK_REQUEST);
+                w.u32(*id);
+            }
         }
     }
     w.0

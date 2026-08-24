@@ -15,7 +15,7 @@ use webkit6::prelude::*;
 
 use bunsen_protocol::codec::decode_commands;
 use bunsen_protocol::eventq::EventQueue;
-use bunsen_protocol::protocol::{Command, Config, Event, TabId};
+use bunsen_protocol::protocol::{Command, Config, ContentScript, Event, TabId};
 
 struct Ui {
     session: webkit6::NetworkSession,
@@ -25,6 +25,9 @@ struct Ui {
     window: gtk::ApplicationWindow,
     tabs: HashMap<TabId, webkit6::WebView>,
     events: Arc<EventQueue>,
+    /// Content scripts currently registered by the shell. Applied to every
+    /// existing view when they change and every new view when it is made.
+    content_scripts: Vec<ContentScript>,
 }
 
 pub fn run(cfg: Config, commands: async_channel::Receiver<Vec<u8>>, events: Arc<EventQueue>) {
@@ -77,6 +80,7 @@ pub fn run(cfg: Config, commands: async_channel::Receiver<Vec<u8>>, events: Arc<
         window: window.clone(),
         tabs: HashMap::new(),
         events: events.clone(),
+        content_scripts: cfg.content_scripts.clone(),
     }));
 
     let main_loop = glib::MainLoop::new(None, false);
@@ -136,6 +140,9 @@ fn apply(ui: &Rc<RefCell<Ui>>, cmd: Command) {
                 let mut u = ui.borrow_mut();
                 u.stack.add_named(&view, Some(&id.to_string()));
                 u.tabs.insert(id, view.clone());
+                if !u.content_scripts.is_empty() {
+                    apply_content_scripts(&view, &u.content_scripts);
+                }
             }
             if !url.is_empty() {
                 view.load_uri(&url);
@@ -170,8 +177,58 @@ fn apply(ui: &Rc<RefCell<Ui>>, cmd: Command) {
         Command::ChromeHeight { px } => {
             ui.borrow().chrome.set_size_request(-1, px);
         }
+        Command::SetContentScripts { json } => {
+            match serde_json::from_str::<Vec<ContentScript>>(&json) {
+                Ok(list) => {
+                    let views: Vec<_> = ui.borrow().tabs.values().cloned().collect();
+                    for view in &views {
+                        apply_content_scripts(view, &list);
+                    }
+                    ui.borrow_mut().content_scripts = list;
+                }
+                Err(e) => eprintln!("bunsen: bad content_scripts payload: {e}"),
+            }
+        }
+        // WebKit pages have no bridge back to the extension host yet, so a
+        // status line and page-bound messages have nowhere to land.
+        Command::Status { .. } | Command::ToPage { .. } => {}
         Command::AppQuit => {
             ui.borrow().window.close();
+        }
+    }
+}
+
+/// Replace every user script on `view` with the shell's current registrations.
+/// The manager is ours alone — the browser registers nothing else — so
+/// clearing it is safe.
+fn apply_content_scripts(view: &webkit6::WebView, list: &[ContentScript]) {
+    use webkit6::UserContentInjectedFrames;
+    use webkit6::UserScriptInjectionTime;
+
+    let Some(ucm) = view.user_content_manager() else {
+        return;
+    };
+    ucm.remove_all_scripts();
+    for reg in list {
+        for file in &reg.files {
+            let Ok(code) = std::fs::read_to_string(file) else {
+                eprintln!("bunsen: {}: cannot read {file}", reg.ext);
+                continue;
+            };
+            let allow: Vec<&str> = if reg.matches.is_empty() {
+                vec!["<all_urls>"]
+            } else {
+                reg.matches.iter().map(String::as_str).collect()
+            };
+            let script = webkit6::UserScript::for_world(
+                &code,
+                UserContentInjectedFrames::AllFrames,
+                UserScriptInjectionTime::End,
+                "bunsen-content",
+                &allow,
+                &[],
+            );
+            ucm.add_script(&script);
         }
     }
 }

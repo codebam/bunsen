@@ -27,6 +27,9 @@ export class ExtensionHost {
   #storage: ExtensionStorage;
   #extensions = new Map<string, Extension>();
   #workers = new Map<string, Worker>();
+  /** In-flight background messages, keyed by ticket. */
+  #messageWaiters = new Map<number, (value: unknown) => void>();
+  #nextMessage = 1;
 
   constructor(storagePath: string, shell: ShellBridge) {
     this.#storage = new ExtensionStorage(storagePath);
@@ -35,6 +38,70 @@ export class ExtensionHost {
 
   get extensions(): Extension[] {
     return [...this.#extensions.values()];
+  }
+
+  /**
+   * Run one `browser.*` call on behalf of a page or content script.
+   *
+   * Content scripts get the same permission check as background code, because
+   * the check is keyed on the extension, not on where the call came from.
+   */
+  async callApi(extensionId: string, method: string, params: unknown): Promise<unknown> {
+    const extension = this.#extensions.get(extensionId);
+    if (!extension) throw new Error(`unknown extension: ${extensionId}`);
+    return this.#api.dispatch(extension, method, params);
+  }
+
+  /**
+   * Deliver a message to an extension's background context and wait for its
+   * answer — `chrome.runtime.sendMessage` from a content script.
+   *
+   * Resolves to undefined if the extension has no background worker or no
+   * listener takes it, so a caller is never left hanging.
+   */
+  async sendToBackground(
+    extensionId: string,
+    message: unknown,
+    sender: unknown,
+  ): Promise<unknown> {
+    const worker = this.#workers.get(extensionId);
+    if (!worker) return undefined;
+
+    const id = this.#nextMessage++;
+    return new Promise<unknown>((resolve) => {
+      const timer = setTimeout(() => {
+        // A wedged background worker must not leak a waiter forever.
+        this.#messageWaiters.delete(id);
+        resolve(undefined);
+      }, 5_000);
+      this.#messageWaiters.set(id, (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      });
+      worker.postMessage({ kind: "message", id, message, sender });
+    });
+  }
+
+  /**
+   * Every content script every loaded extension asks for, with file contents
+   * resolved to absolute paths the renderer can read.
+   */
+  contentScripts(): { ext: string; matches: string[]; files: string[] }[] {
+    const out: { ext: string; matches: string[]; files: string[] }[] = [];
+    for (const extension of this.#extensions.values()) {
+      for (const script of extension.manifest.contentScripts) {
+        const files = script.js
+          .map((relative) => safeJoin(extension.root, relative))
+          .filter((path): path is string => path !== null && existsSync(path));
+        if (files.length === 0) continue;
+        out.push({
+          ext: extension.id,
+          matches: script.matches.sources,
+          files,
+        });
+      }
+    }
+    return out;
   }
 
   /** Load every subdirectory of `dir` that looks like an extension. */
@@ -108,6 +175,13 @@ export class ExtensionHost {
         if (msg?.kind === "started") return resolveStart();
         if (msg?.kind === "failed") return rejectStart(new Error(msg.error));
         if (msg?.kind === "call") void this.#answer(extension, worker, msg);
+        if (msg?.kind === "message-reply") {
+          const waiter = this.#messageWaiters.get(msg.id);
+          if (waiter) {
+            this.#messageWaiters.delete(msg.id);
+            waiter(msg.value);
+          }
+        }
       });
       worker.addEventListener("error", (event) => rejectStart(new Error(String(event))));
       worker.postMessage({ kind: "start", script });

@@ -20,6 +20,9 @@ export const OP = {
   tab_stop: 8,
   chrome_height: 9,
   app_quit: 10,
+  set_content_scripts: 11,
+  status: 12,
+  to_page: 13,
 } as const;
 
 export const EV = {
@@ -33,6 +36,10 @@ export const EV = {
   8: "tab_favicon",
   9: "tab_requested",
   10: "window_closed",
+  11: "tab_close_request",
+  12: "page_event",
+  13: "bookmark_request",
+  14: "navigate_request",
 } as const;
 
 const utf8 = new TextEncoder();
@@ -114,6 +121,26 @@ export function encodeCommands(commands: Command[]): Uint8Array {
         break;
       case "chrome_height":
         w.i32(c.px);
+        break;
+      case "set_content_scripts":
+        w.str(c.json);
+        break;
+      case "status":
+        w.str(c.text);
+        break;
+      case "to_page":
+        w.u32(c.id);
+        w.str(c.payload);
+        break;
+      case "set_content_scripts":
+        w.str(c.json);
+        break;
+      case "status":
+        w.str(c.text);
+        break;
+      case "to_page":
+        w.u32(c.id);
+        w.str(c.payload);
         break;
       case "app_quit":
         break;
@@ -216,6 +243,30 @@ export function decodeEvents(bytes: Uint8Array): BackendEvent[] {
         break;
       case 10:
         out.push({ ev: "window_closed" });
+        break;
+      case 11:
+        out.push({ ev: "tab_close_request", id: r.u32() });
+        break;
+      case 12:
+        out.push({ ev: "page_event", id: r.u32(), payload: r.str() });
+        break;
+      case 13:
+        out.push({ ev: "bookmark_request", id: r.u32() });
+        break;
+      case 14:
+        out.push({ ev: "navigate_request", id: r.u32(), text: r.str() });
+        break;
+      case 11:
+        out.push({ ev: "tab_close_request", id: r.u32() });
+        break;
+      case 12:
+        out.push({ ev: "page_event", id: r.u32(), payload: r.str() });
+        break;
+      case 13:
+        out.push({ ev: "bookmark_request", id: r.u32() });
+        break;
+      case 14:
+        out.push({ ev: "navigate_request", id: r.u32(), text: r.str() });
         break;
       default:
         // No per-message length prefix means no way to skip an unknown

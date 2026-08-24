@@ -43,8 +43,8 @@ From a checkout, for development:
 | --- | --- | --- |
 | `BUNSEN_HOME_PAGE` | `https://duckduckgo.com` | Start page |
 | `BUNSEN_PROFILE` | `$XDG_DATA_HOME/bunsen/profile` | Cookies, storage, favicon DB |
-| `BUNSEN_ENGINE` | `webkit` | `webkit` or `blitz` |
-| `BUNSEN_TRANSPORT` | `ffi` | `ffi`, `socket`, or `process-per-tab` |
+| `BUNSEN_ENGINE` | `blitz` | `blitz` or `webkit` |
+| `BUNSEN_TRANSPORT` | per engine | `ffi`, `socket`, or `process-per-tab` |
 | `BUNSEN_EXTENSIONS_DIR` | `$BUNSEN_PROFILE/extensions` | Unpacked MV3 extensions |
 | `BUNSEN_BACKEND_PATH` | build output | Which backend `.so` to load |
 | `BUNSEN_HOST_PATH` | build output | WebKit host binary (used when `BUNSEN_ENGINE=webkit`) |
@@ -83,6 +83,11 @@ history in SQLite, favicons, persistent cookies and storage per profile,
 third-party cookies blocked, popup blocking, `target=_blank` opening real
 tabs, a renderer that can run in-process, out-of-process, or one process per
 tab, a second rendering engine, and MV3 extensions with background workers.
+
+**The default engine has no visible chrome yet.** Blitz binds one document to
+one window and the chrome UI is a second document, so the tab strip and
+omnibox are not drawn on it. That is the next piece of work. `BUNSEN_ENGINE=webkit`
+gets you the full chrome UI on WebKitGTK in the meantime.
 
 Half-working: **extensions** load and run their background service workers
 with `storage`, `tabs` and `runtime` behind a permission check, but cannot
@@ -142,8 +147,9 @@ embedding, which is a real piece of work and not yet done.
   an eventfd and pokes a threadsafe `JSCallback`; the 250ms timer is only a
   safety net), a binary wire format, and a transport abstraction with an
   out-of-process renderer behind it.
-- **Phase 2 — Blitz backend.** Stylo + Taffy + Parley + Vello behind the same
-  header. Shell code does not change.
+- **Phase 2 — Blitz backend.** Done, and now the default. Stylo + Taffy +
+  Parley + Vello behind the same header; the shell did not change. What is
+  missing is chrome compositing — see below.
 - **Phase 3 — the rest of a browser.** Event dispatch, forms, session history,
   cookie/storage partitioning, HTTP cache, accessibility tree.
 

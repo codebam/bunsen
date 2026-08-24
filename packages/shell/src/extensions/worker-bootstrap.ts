@@ -29,6 +29,13 @@ function call(method: string, params: unknown): Promise<unknown> {
  * sends it. Unimplemented methods then fail at the shell with a real message
  * rather than as "undefined is not a function".
  */
+/** Listeners registered through `chrome.runtime.onMessage.addListener`. */
+const messageListeners: ((
+  message: unknown,
+  sender: unknown,
+  sendResponse: (v: unknown) => void,
+) => unknown)[] = [];
+
 function namespace(path: string[]): any {
   return new Proxy(function () {} as any, {
     get(_target, prop) {
@@ -37,6 +44,18 @@ function namespace(path: string[]): any {
     },
     apply(_target, _this, args) {
       const method = path.join(".");
+      // Listener registration is local state, not a call into the shell.
+      // Forwarding it would come back as "not implemented", and an extension
+      // that cannot receive messages cannot answer its content scripts.
+      if (method === "runtime.onMessage.addListener") {
+        messageListeners.push(args[0] as any);
+        return undefined;
+      }
+      if (method === "runtime.onMessage.removeListener") {
+        const i = messageListeners.indexOf(args[0] as any);
+        if (i >= 0) messageListeners.splice(i, 1);
+        return undefined;
+      }
       // storage areas read as storage.local.get; the shell wants
       // storage.get with an area parameter.
       const storage = /^storage\.(local|session|sync)\.(\w+)$/.exec(method);
@@ -97,6 +116,31 @@ self.onmessage = async (event: MessageEvent) => {
     pending.delete(msg.id);
     if (msg.error) waiter.reject(new Error(msg.error));
     else waiter.resolve(msg.value);
+    return;
+  }
+
+  if (msg?.kind === "message") {
+    // A content script (or the shell) is talking to this background context.
+    // First listener to answer wins, matching the WebExtensions rule that a
+    // sendResponse or a returned promise settles the message.
+    let answered = false;
+    const respond = (value: unknown) => {
+      if (answered) return;
+      answered = true;
+      self.postMessage({ kind: "message-reply", id: msg.id, value });
+    };
+    for (const fn of messageListeners) {
+      try {
+        const returned = fn(msg.message, msg.sender, respond);
+        if (returned && typeof (returned as any).then === "function") {
+          void (returned as Promise<unknown>).then(respond, () => respond(undefined));
+        }
+      } catch {
+        // A listener that throws must not stop the others.
+      }
+    }
+    // Nothing took it: settle so the caller is not left hanging forever.
+    queueMicrotask(() => respond(undefined));
     return;
   }
 

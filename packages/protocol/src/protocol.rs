@@ -10,6 +10,17 @@ use serde::Deserialize;
 
 pub type TabId = u32;
 
+/// One extension's content-script registration, resolved by the shell into
+/// absolute file paths before it crosses.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ContentScript {
+    pub ext: String,
+    #[serde(default)]
+    pub matches: Vec<String>,
+    #[serde(default)]
+    pub files: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub chrome_url: String,
@@ -19,8 +30,8 @@ pub struct Config {
     pub height: i32,
     #[serde(default = "default_chrome_height")]
     pub chrome_height: i32,
-    /// Profile directory. Cookies, local storage and the favicon database
-    /// live here; omit it for a session that forgets everything on exit.
+    /// Profile directory. Cookies, storage and the favicon database live
+    /// here; omit it for a session that forgets everything on exit.
     #[serde(default)]
     pub data_dir: Option<String>,
     #[serde(default)]
@@ -29,6 +40,10 @@ pub struct Config {
     /// that default *is* the popup blocker.
     #[serde(default)]
     pub allow_popups: bool,
+    /// Content scripts known at startup; more can arrive later via
+    /// `Command::SetContentScripts` when an extension is installed live.
+    #[serde(default)]
+    pub content_scripts: Vec<ContentScript>,
 }
 
 fn default_width() -> i32 {
@@ -43,15 +58,52 @@ fn default_chrome_height() -> i32 {
 
 #[derive(Debug, PartialEq)]
 pub enum Command {
-    TabCreate { id: TabId, url: String },
-    TabClose { id: TabId },
-    TabActivate { id: TabId },
-    TabNavigate { id: TabId, url: String },
-    TabBack { id: TabId },
-    TabForward { id: TabId },
-    TabReload { id: TabId, bypass_cache: bool },
-    TabStop { id: TabId },
-    ChromeHeight { px: i32 },
+    TabCreate {
+        id: TabId,
+        url: String,
+    },
+    TabClose {
+        id: TabId,
+    },
+    TabActivate {
+        id: TabId,
+    },
+    TabNavigate {
+        id: TabId,
+        url: String,
+    },
+    TabBack {
+        id: TabId,
+    },
+    TabForward {
+        id: TabId,
+    },
+    TabReload {
+        id: TabId,
+        bypass_cache: bool,
+    },
+    TabStop {
+        id: TabId,
+    },
+    ChromeHeight {
+        px: i32,
+    },
+    /// Replace the backend's content-script table. The payload is the same
+    /// JSON shape as Config's `content_scripts`; it crosses as one string so
+    /// this opcode never grows fields.
+    SetContentScripts {
+        json: String,
+    },
+    /// A transient message for the chrome bar's status slot (install
+    /// results, bookmark confirmations, and friends).
+    Status {
+        text: String,
+    },
+    /// Deliver a JSON payload into a tab's page/content-script context.
+    ToPage {
+        id: TabId,
+        payload: String,
+    },
     AppQuit,
 }
 
@@ -96,4 +148,27 @@ pub enum Event {
         url: String,
     },
     WindowClosed,
+    /// The in-window chrome bar asked for a tab to die; the shell owns tab
+    /// lifetime, so it is asked rather than told.
+    TabCloseRequest {
+        id: TabId,
+    },
+    /// A page/content-script context said something the extension host must
+    /// hear. Payload is opaque JSON from the backend's point of view.
+    PageEvent {
+        id: TabId,
+        payload: String,
+    },
+    /// Ctrl-D in the window; the shell owns the bookmarks store.
+    /// The omnibox was submitted. The text is raw, exactly as typed: what it
+    /// means — a URL, a search, an extension to install — is the shell's
+    /// policy to decide, and duplicating that heuristic here would mean two
+    /// address bars that disagree.
+    NavigateRequest {
+        id: TabId,
+        text: String,
+    },
+    BookmarkRequest {
+        id: TabId,
+    },
 }

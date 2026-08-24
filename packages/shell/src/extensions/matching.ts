@@ -130,6 +130,14 @@ export class MatchSet {
     return this.#patterns.length;
   }
 
+  /**
+   * The patterns as written. The renderer does its own matching against the
+   * page URL, so it needs the source strings rather than our compiled form.
+   */
+  get sources(): string[] {
+    return this.#patterns.map((p) => p.source);
+  }
+
   matches(url: string): boolean {
     return this.#patterns.some((p) => p.matches(url));
   }

@@ -19,7 +19,16 @@ export type Command =
   | { op: "tab_reload"; id: TabId; bypass_cache?: boolean }
   | { op: "tab_stop"; id: TabId }
   | { op: "chrome_height"; px: number }
+  | { op: "set_content_scripts"; json: string }
+  | { op: "status"; text: string }
+  | { op: "to_page"; id: TabId; payload: string }
   | { op: "app_quit" };
+
+export interface ContentScript {
+  ext: string;
+  matches: string[];
+  files: string[];
+}
 
 export type BackendEvent =
   | { ev: "ready" }
@@ -31,7 +40,11 @@ export type BackendEvent =
   | { ev: "tab_failed"; id: TabId; url: string; message: string }
   | { ev: "tab_favicon"; id: TabId; data_url: string }
   | { ev: "tab_requested"; opener: TabId; url: string }
-  | { ev: "window_closed" };
+  | { ev: "window_closed" }
+  | { ev: "tab_close_request"; id: TabId }
+  | { ev: "page_event"; id: TabId; payload: string }
+  | { ev: "bookmark_request"; id: TabId }
+  | { ev: "navigate_request"; id: TabId; text: string };
 
 export interface BackendConfig {
   chrome_url: string;
@@ -43,6 +56,8 @@ export interface BackendConfig {
   cache_dir?: string;
   /** Let scripts open windows without a user gesture. Off is the popup blocker. */
   allow_popups?: boolean;
+  /** Content scripts known at startup; more can arrive via set_content_scripts. */
+  content_scripts?: ContentScript[];
 }
 
 export interface RenderBackend {
