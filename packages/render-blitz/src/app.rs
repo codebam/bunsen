@@ -845,7 +845,17 @@ impl BunsenApp {
                     }
                 }
                 JsMsg::Html(stripped) => {
+                    // Rebuilding the document throws away everything it has
+                    // loaded — decoded images most visibly. The engine emits
+                    // a snapshot after any mutation, so an unchanged one used
+                    // to reinstall anyway and images were refetched and
+                    // discarded before they could ever be painted. Reparsing
+                    // identical markup cannot change what is on screen.
+                    let unchanged = self.display_cache.get(&env.tab) == Some(&stripped);
                     self.display_cache.insert(env.tab, stripped.clone());
+                    if unchanged {
+                        continue;
+                    }
                     if self.active == Some(env.tab) {
                         let url = self
                             .tabs

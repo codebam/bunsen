@@ -2156,9 +2156,16 @@ function logLine(level: string, args: unknown[]): void {
   const text = args
     .map((a) => {
       if (typeof a === "string") return a;
+      // JSON.stringify of an Error is "{}" — message and stack are
+      // non-enumerable — so `console.error(err)` printed nothing useful,
+      // which is exactly the case you most want to read.
+      if (a instanceof Error) {
+        return a.stack ? `${a.name}: ${a.message}\n${a.stack}` : `${a.name}: ${a.message}`;
+      }
       try {
         return JSON.stringify(a) ?? String(a);
       } catch {
+        // Cyclic or exotic objects still have to say something.
         return String(a);
       }
     })
@@ -2172,6 +2179,49 @@ function navigateTo(url: string): void {
   } catch (e) {
     report("navigate", e);
   }
+}
+
+/**
+ * The per-tag element interfaces, as globals.
+ *
+ * Pages reference these constantly — `instanceof HTMLFormElement`, or simply
+ * touching the name — and a missing one is a ReferenceError that takes the
+ * whole script with it. DuckDuckGo's homepage died on `HTMLFormElement`
+ * alone, which is why its search box never appeared.
+ *
+ * Every one maps to `Element`: this DOM has a single element class, so
+ * `instanceof` is permissive rather than exact. That is the right trade —
+ * a too-broad `instanceof` misroutes a branch, a missing global kills the
+ * script outright. Listing the whole standard set rather than adding them
+ * one crash at a time is the point.
+ */
+function elementInterfaces(): Record<string, typeof Element> {
+  const names = [
+    "HTMLElement", "HTMLUnknownElement", "HTMLHtmlElement", "HTMLHeadElement",
+    "HTMLBodyElement", "HTMLDivElement", "HTMLSpanElement", "HTMLParagraphElement",
+    "HTMLHeadingElement", "HTMLInputElement", "HTMLButtonElement", "HTMLFormElement",
+    "HTMLLabelElement", "HTMLSelectElement", "HTMLOptionElement", "HTMLOptGroupElement",
+    "HTMLTextAreaElement", "HTMLFieldSetElement", "HTMLLegendElement", "HTMLDataListElement",
+    "HTMLOutputElement", "HTMLProgressElement", "HTMLMeterElement", "HTMLAnchorElement",
+    "HTMLAreaElement", "HTMLImageElement", "HTMLPictureElement", "HTMLSourceElement",
+    "HTMLVideoElement", "HTMLAudioElement", "HTMLMediaElement", "HTMLTrackElement",
+    "HTMLScriptElement", "HTMLStyleElement", "HTMLLinkElement", "HTMLMetaElement",
+    "HTMLTitleElement", "HTMLBaseElement", "HTMLTemplateElement", "HTMLSlotElement",
+    "HTMLIFrameElement", "HTMLCanvasElement", "HTMLObjectElement", "HTMLEmbedElement",
+    "HTMLTableElement", "HTMLTableRowElement", "HTMLTableCellElement",
+    "HTMLTableSectionElement", "HTMLTableColElement", "HTMLTableCaptionElement",
+    "HTMLUListElement", "HTMLOListElement", "HTMLLIElement", "HTMLDListElement",
+    "HTMLPreElement", "HTMLQuoteElement", "HTMLHRElement", "HTMLBRElement",
+    "HTMLModElement", "HTMLDetailsElement", "HTMLDialogElement", "HTMLMenuElement",
+    "HTMLMapElement", "HTMLTimeElement", "HTMLDataElement", "HTMLFontElement",
+    "HTMLMarqueeElement", "HTMLFrameElement", "HTMLFrameSetElement",
+    "SVGElement", "SVGSVGElement", "SVGGraphicsElement", "SVGPathElement",
+    "SVGGElement", "SVGUseElement", "SVGRectElement", "SVGCircleElement",
+    "SVGTextElement", "SVGImageElement", "MathMLElement",
+  ];
+  const out: Record<string, typeof Element> = {};
+  for (const name of names) out[name] = Element;
+  return out;
 }
 
 function installWindowGlobals(): void {
@@ -2543,20 +2593,7 @@ function installWindowGlobals(): void {
     ShadowRoot: class {},
     ElementClass: Element,
     Element,
-    HTMLElement: Element,
-    HTMLHtmlElement: Element,
-    HTMLBodyElement: Element,
-    HTMLDivElement: Element,
-    HTMLSpanElement: Element,
-    HTMLInputElement: Element,
-    HTMLButtonElement: Element,
-    HTMLAnchorElement: Element,
-    HTMLImageElement: Element,
-    HTMLScriptElement: Element,
-    HTMLStyleElement: Element,
-    HTMLIFrameElement: Element,
-    HTMLCanvasElement: Element,
-    SVGElement: Element,
+    ...elementInterfaces(),
     Text: Text,
     Comment: Comment,
     CharacterData: Element,

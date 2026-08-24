@@ -28,6 +28,15 @@ winit-wayland = "=0.31.0-beta.2"
 
 async-channel = "2"
 libc = "0.2"
+
+# blitz-dom depends on `image` with default-features = false, which compiles
+# in no decoders at all — every <img> fetched fine and then painted nothing.
+# Cargo features are additive across the graph, so enabling the formats here
+# turns them on for blitz-dom's decode path. These are the formats the web
+# actually serves.
+image = { version = "=0.25.6", default-features = false, features = [
+  "png", "jpeg", "gif", "webp", "bmp", "ico", "tiff",
+] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 url = "2"
 serde = { version = "1", features = ["derive"] }
