@@ -141,6 +141,14 @@ import type { Socket, Subprocess } from "bun";
  * Frames are u32 little-endian length prefixes around the same batches the
  * FFI transport passes by pointer.
  */
+/**
+ * Process-wide counter. Two transports created in the same millisecond would
+ * otherwise pick the same socket path, and the second renderer would unlink
+ * the first's socket out from under it — which showed up as a tab that never
+ * loaded, only when several were started at once.
+ */
+let socketSequence = 0;
+
 export class SocketTransport implements Transport {
   #hostPath: string;
   #socketPath: string;
@@ -152,7 +160,10 @@ export class SocketTransport implements Transport {
 
   constructor(hostPath: string) {
     this.#hostPath = hostPath;
-    this.#socketPath = join(tmpdir(), `bunsen-${process.pid}-${Date.now()}.sock`);
+    this.#socketPath = join(
+      tmpdir(),
+      `bunsen-${process.pid}-${Date.now()}-${socketSequence++}.sock`,
+    );
   }
 
   /** Resolves once the renderer has connected back. */
@@ -180,6 +191,11 @@ export class SocketTransport implements Transport {
         await Bun.sleep(10);
       }
     }
+  }
+
+  /** The renderer's process id, for supervision. Null before start(). */
+  get pid(): number | null {
+    return this.#proc?.pid ?? null;
   }
 
   /** Fires when the renderer process goes away — a crash, or a closed window. */

@@ -9,10 +9,11 @@
  */
 
 import { decodeEvents, encodeCommands } from "./codec";
+import { ProcessPerTabBackend } from "./supervisor";
 import { FfiTransport, SocketTransport, type Transport } from "./transport";
 import type { BackendConfig, BackendEvent, Command, RenderBackend } from "./types";
 
-export type TransportKind = "ffi" | "socket";
+export type TransportKind = "ffi" | "socket" | "process-per-tab";
 
 export class BackendClient implements RenderBackend {
   #transport: Transport;
@@ -83,14 +84,20 @@ export class BackendClient implements RenderBackend {
 }
 
 /**
- * Pick a transport. `socket` isolates the renderer in its own process, so a
- * renderer crash loses the window instead of the browser; `ffi` keeps it
- * in-process, which is one less context switch per batch.
+ * Pick a transport.
+ *
+ * - `ffi` keeps the renderer in-process: one less context switch per batch.
+ * - `socket` gives the renderer its own process, so a crash loses the window
+ *   rather than the browser.
+ * - `process-per-tab` gives *each tab* its own renderer process. Real
+ *   isolation, but one OS window per tab until there is a compositor — see
+ *   supervisor.ts.
  */
 export function createBackend(
   kind: TransportKind,
   paths: { library: string; host: string },
-): BackendClient {
+): RenderBackend {
+  if (kind === "process-per-tab") return new ProcessPerTabBackend(paths.host);
   const transport =
     kind === "socket" ? new SocketTransport(paths.host) : new FfiTransport(paths.library);
   return new BackendClient(transport);

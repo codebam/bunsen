@@ -151,6 +151,9 @@ fn apply(ui: &Rc<RefCell<Ui>>, cmd: Command) {
             let u = ui.borrow();
             if u.tabs.contains_key(&id) {
                 u.stack.set_visible_child_name(&id.to_string());
+                // With one tab per process there is a window per tab, so
+                // activating one means raising it.
+                u.window.present();
             }
         }
         Command::TabNavigate { id, url } => with_tab(ui, id, |v| v.load_uri(&url)),

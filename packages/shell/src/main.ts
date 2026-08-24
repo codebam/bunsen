@@ -12,6 +12,8 @@ import type { ServerWebSocket } from "bun";
 
 import { createBackend, type TransportKind } from "./backend/client";
 import type { BackendEvent } from "./backend/types";
+import type { ShellBridge, TabView } from "./extensions/api";
+import { ExtensionHost } from "./extensions/registry";
 import { History } from "./history";
 import { resolve as resolveOmnibox } from "./omnibox";
 import { TabStore } from "./tabs";
@@ -41,6 +43,8 @@ const PROFILE =
     "bunsen",
     "profile",
   );
+
+const EXTENSIONS_DIR = Bun.env.BUNSEN_EXTENSIONS_DIR ?? join(PROFILE, "extensions");
 
 const history = new History();
 const tabs = new TabStore();
@@ -101,6 +105,21 @@ await backend.start({
   data_dir: PROFILE,
   cache_dir: join(PROFILE, "cache"),
 });
+
+// Extensions come up after the renderer, so tabs.query has something to see.
+const extensionHost = new ExtensionHost(join(PROFILE, "extensions.db"), shellBridge());
+const extensionReport = extensionHost.loadAll(EXTENSIONS_DIR);
+for (const { id, warnings } of extensionReport.warnings) {
+  for (const warning of warnings) console.warn(`bunsen: ${id}: ${warning}`);
+}
+for (const { path, errors } of extensionReport.failures) {
+  console.error(`bunsen: failed to load ${path}: ${errors.join("; ")}`);
+}
+for (const extension of extensionHost.extensions) {
+  extensionHost.startBackground(extension).catch((err) => {
+    console.error(`bunsen: ${extension.id} background worker: ${err}`);
+  });
+}
 
 openTab(HOME);
 console.log(
@@ -221,7 +240,55 @@ function onBackendEvent(ev: BackendEvent): void {
   pushState();
 }
 
+/** What the extension APIs are allowed to do to the browser. */
+function shellBridge(): ShellBridge {
+  const view = (id: number): TabView | null => {
+    const tab = tabs.get(id);
+    return tab
+      ? {
+          id: tab.id,
+          url: tab.url,
+          title: tab.title,
+          active: tabs.activeId === tab.id,
+          loading: tab.loading,
+        }
+      : null;
+  };
+
+  return {
+    listTabs: () => tabs.list().map((t) => view(t.id)!).filter(Boolean),
+    createTab: (url, active) => {
+      const tab = tabs.create(url);
+      backend.send({ op: "tab_create", id: tab.id, url });
+      if (active) {
+        tabs.activate(tab.id);
+        backend.send({ op: "tab_activate", id: tab.id });
+      }
+      pushState();
+      return view(tab.id)!;
+    },
+    updateTab: (id, changes) => {
+      if (changes.url !== undefined) {
+        tabs.update(id, { url: changes.url });
+        backend.send({ op: "tab_navigate", id, url: changes.url });
+      }
+      if (changes.active) {
+        tabs.activate(id);
+        backend.send({ op: "tab_activate", id });
+      }
+      pushState();
+      return view(id);
+    },
+    removeTab: (id) => closeTab(id),
+    onExtensionMessage: (extension, message) => {
+      // Nothing subscribes yet; the chrome UI is the eventual listener.
+      console.log(`bunsen: message from ${extension}:`, message);
+    },
+  };
+}
+
 function shutdown(): void {
+  extensionHost.stop();
   backend.flush();
   backend.stop();
   history.close();

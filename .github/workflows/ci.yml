@@ -13,17 +13,17 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: Build render backend
-        run: nix develop --command cargo build --manifest-path packages/render-webkit/Cargo.toml
+      - name: Build render backends
+        run: nix develop --command cargo build
 
       - name: Rust formatting
-        run: nix develop --command cargo fmt --manifest-path packages/render-webkit/Cargo.toml -- --check
+        run: nix develop --command cargo fmt --all -- --check
 
-      - name: Codec tests
-        run: nix develop --command cargo test --manifest-path packages/render-webkit/Cargo.toml
+      - name: Rust tests
+        run: nix develop --command cargo test
 
       - name: Clippy
-        run: nix develop --command cargo clippy --manifest-path packages/render-webkit/Cargo.toml -- -D warnings
+        run: nix develop --command cargo clippy --all-targets -- -D warnings
 
       # The FFI test needs a display and skips itself here; the shell unit
       # tests do not.

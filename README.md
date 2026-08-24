@@ -43,9 +43,12 @@ From a checkout, for development:
 | --- | --- | --- |
 | `BUNSEN_HOME_PAGE` | `https://duckduckgo.com` | Start page |
 | `BUNSEN_PROFILE` | `$XDG_DATA_HOME/bunsen/profile` | Cookies, storage, favicon DB |
-| `BUNSEN_TRANSPORT` | `ffi` | `ffi` or `socket` (renderer in its own process) |
+| `BUNSEN_ENGINE` | `webkit` | `webkit` or `blitz` |
+| `BUNSEN_TRANSPORT` | `ffi` | `ffi`, `socket`, or `process-per-tab` |
+| `BUNSEN_EXTENSIONS_DIR` | `$BUNSEN_PROFILE/extensions` | Unpacked MV3 extensions |
 | `BUNSEN_BACKEND_PATH` | build output | Which backend `.so` to load |
 | `BUNSEN_HOST_PATH` | build output | Which render host binary to spawn |
+| `BUNSEN_BLITZ_HOST_PATH` | build output | The Blitz host binary |
 
 ## Testing
 
@@ -72,13 +75,18 @@ restart.
 Working: tabs, back/forward/reload/stop, omnibox with history suggestions,
 history in SQLite, favicons, persistent cookies and storage per profile,
 third-party cookies blocked, popup blocking, `target=_blank` opening real
-tabs, and a renderer that can run in or out of process.
+tabs, a renderer that can run in-process, out-of-process, or one process per
+tab, a second rendering engine, and MV3 extensions with background workers.
 
-Not there yet: **extensions of any kind** (see
-[`docs/extensions.md`](./docs/extensions.md) — the short version is that
-WebKitGTK cannot expose WebExtensions and phase 2 is what changes that),
-downloads, find-in-page, private windows, bookmarks, session restore,
-zoom, and a settings UI.
+Half-working: **extensions** load and run their background service workers
+with `storage`, `tabs` and `runtime` behind a permission check, but cannot
+inject content scripts yet — that needs a DOM we own, which is what the Blitz
+backend is for. See [`docs/extensions.md`](./docs/extensions.md).
+**Process-per-tab** isolates renderers properly but gives each one its own
+window, because nothing can composite them into one yet.
+
+Not there yet: downloads, find-in-page, private windows, bookmarks, session
+restore, zoom, and a settings UI.
 
 ## The boundary
 

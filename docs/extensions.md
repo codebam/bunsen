@@ -1,7 +1,38 @@
 # Extensions
 
-**Today: none.** Bunsen loads no extensions of any kind. This document is
-about why that is, and why the answer changes completely at phase 2.
+**Today: the browser half works, the page half does not.** Bunsen loads
+unpacked MV3 extensions, runs their background service workers, and answers
+`storage`, `tabs` and `runtime` calls with permissions enforced. It cannot yet
+inject content scripts, because that needs a DOM we own. This document is
+about that split, and why the second half arrives with Blitz.
+
+## What is implemented
+
+- **Manifest V3 loading** from `$BUNSEN_PROFILE/extensions/*/manifest.json`.
+  Strict: an unsupported `manifest_version`, or MV2's `background.scripts`,
+  is a load failure rather than a half-understood extension. Unknown
+  permissions and malformed match patterns are dropped with a warning, never
+  silently granted.
+- **Match patterns**, the real ones — `*://*.example.com/*` matches
+  `example.com` and its subdomains but not `evil-example.com`, a bare `*`
+  scheme means web schemes and never `file:`, and path globs are anchored at
+  both ends with regex metacharacters escaped.
+- **Background service workers**, each in a Bun `Worker`. The extension gets
+  no reference to anything of ours: `browser` and `chrome` are proxies whose
+  only channel out is `postMessage`, and the only thing on the other end is a
+  permission-checked dispatcher.
+- **`browser.storage`** (`local`, `session`, `sync`) on SQLite, partitioned by
+  extension id in the schema, with Chrome's 10MB quota enforced
+  transactionally so an oversized write rolls back rather than half-lands.
+- **`browser.tabs`** — `query`, `create`, `update`, `remove` — against the
+  shell's own tab store.
+- **`browser.runtime`** — `getManifest`, `getURL`, `sendMessage`.
+
+Permissions are checked in exactly one place, and an API we have not built
+throws `not implemented: browser.x.y` rather than being `undefined`, so an
+extension can feature-detect us honestly.
+
+## What is not, and why
 
 ## Why WebKitGTK cannot give us WebExtensions
 
@@ -14,7 +45,9 @@ reimplement content-script injection and a slice of the `browser.*` surface
 yourself, in C, per API, with no manifest support and no story for popups,
 options pages, or the extension's own background context.
 
-So on phase 0 the honest options are:
+Content scripts are the gap. Everything above is browser plumbing that lives
+in the shell; injection needs a DOM and an isolated world to inject into.
+So on the WebKitGTK backend the honest options are:
 
 1. Ship no extensions.
 2. Patch WebKitGTK to expose `WKWebExtension`, and maintain that patch.
@@ -75,13 +108,16 @@ scripts, `storage`, `tabs`, `runtime` messaging, and declarative request
 blocking. Full WebExtensions parity is a multi-year project for a funded team,
 and pretending otherwise on a roadmap would be dishonest.
 
-## What would land first
+## What would land next
 
-In rough order of value per unit of work:
+Item 3 below is done — see "What is implemented". The rest, in rough order of
+value per unit of work:
 
-1. Content blocking, on the current backend, via WebKit's rule engine.
-2. User scripts and stylesheets, on the current backend.
-3. The shell-side halves of the extension API — manifest parsing, permissions,
-   `storage`, `tabs`, `runtime` — testable long before there is a page to
-   inject into.
-4. Content-script injection, once phase 2 owns the DOM.
+1. Content blocking, on the WebKit backend, via WebKit's rule engine, driven
+   by `declarativeNetRequest` rules from the manifest.
+2. User scripts and stylesheets, on the WebKit backend, via
+   `WebKitUserContentManager`.
+3. ~~The shell-side halves of the extension API.~~ Done.
+4. Popup and options pages, which are ordinary pages `Bun.serve` can host and
+   the chrome UI can open.
+5. Content-script injection, once the Blitz backend owns the DOM.
