@@ -186,7 +186,19 @@ export class ExtensionHost {
         }
       });
       worker.addEventListener("error", (event) => rejectStart(new Error(String(event))));
-      worker.postMessage({ kind: "start", script });
+      worker.postMessage({
+        kind: "start",
+        script,
+        // The synchronous half of the API is answered inside the worker, so
+        // it needs identity up front rather than on request.
+        extensionId: extension.id,
+        manifest: {
+          manifest_version: 3,
+          name: extension.manifest.name,
+          version: extension.manifest.version,
+          description: extension.manifest.description,
+        },
+      });
     });
   }
 
@@ -269,7 +281,13 @@ function localize(manifest: Manifest, root: string, defaultLocale: unknown): voi
  * extension directory. A manifest is untrusted input.
  */
 function safeJoin(root: string, relative: string): string | null {
-  if (isAbsolute(relative)) return null;
-  const candidate = resolve(root, relative);
+  // A leading slash in a manifest means the extension root, not the
+  // filesystem root — "/js/background.js" is how real extensions write it,
+  // uBlock Origin Lite among them. Reading it as absolute rejected the very
+  // extensions this is meant to load.
+  const withinExtension = relative.replace(/^\/+/, "");
+  if (!withinExtension || isAbsolute(withinExtension)) return null;
+
+  const candidate = resolve(root, withinExtension);
   return candidate === root || candidate.startsWith(root + "/") ? candidate : null;
 }

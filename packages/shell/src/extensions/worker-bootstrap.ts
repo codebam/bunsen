@@ -15,6 +15,18 @@ type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 const pending = new Map<number, Pending>();
 let nextCall = 1;
 
+/**
+ * Identity handed over at startup.
+ *
+ * Some of the API is synchronous and cannot be proxied: `runtime.getURL` and
+ * `runtime.id` return values, not promises, and real extensions call them
+ * during module evaluation. uBlock Origin Lite does exactly that and died on
+ * `extURL.startsWith(...)` because a Promise has no such method. Anything
+ * answerable from local state is answered here, synchronously.
+ */
+let extensionId = "";
+let extensionManifest: Record<string, unknown> = {};
+
 function call(method: string, params: unknown): Promise<unknown> {
   const id = nextCall++;
   return new Promise((resolve, reject) => {
@@ -40,6 +52,10 @@ function namespace(path: string[]): any {
   return new Proxy(function () {} as any, {
     get(_target, prop) {
       if (typeof prop !== "string") return undefined;
+      // `runtime.id` is a property, not a call, and reads as a string.
+      if (path.length === 1 && path[0] === "runtime" && prop === "id") {
+        return extensionId as any;
+      }
       return namespace([...path, prop]);
     },
     apply(_target, _this, args) {
@@ -56,6 +72,13 @@ function namespace(path: string[]): any {
         if (i >= 0) messageListeners.splice(i, 1);
         return undefined;
       }
+      // Synchronous by contract: these must return values, not promises.
+      if (method === "runtime.getURL") {
+        const path = String(args[0] ?? "").replace(/^\//, "");
+        return `bunsen-extension://${extensionId}/${path}`;
+      }
+      if (method === "runtime.getManifest") return extensionManifest;
+      if (method === "i18n.getMessage") return "";
       // storage areas read as storage.local.get; the shell wants
       // storage.get with an area parameter.
       const storage = /^storage\.(local|session|sync)\.(\w+)$/.exec(method);
@@ -145,6 +168,8 @@ self.onmessage = async (event: MessageEvent) => {
   }
 
   if (msg?.kind === "start") {
+    extensionId = String(msg.extensionId ?? "");
+    extensionManifest = (msg.manifest ?? {}) as Record<string, unknown>;
     try {
       await import(msg.script);
       self.postMessage({ kind: "started" });

@@ -46,6 +46,8 @@ From a checkout, for development:
 | `BUNSEN_ENGINE` | `blitz` | `blitz` or `webkit` |
 | `BUNSEN_TRANSPORT` | per engine | `ffi`, `socket`, or `process-per-tab` |
 | `BUNSEN_EXTENSIONS_DIR` | `$BUNSEN_PROFILE/extensions` | Unpacked MV3 extensions |
+| `BUNSEN_DOWNLOAD_DIR` | `$HOME/Downloads` | Where `<a download>` saves |
+| `BUNSEN_USER_AGENT` | a current Chrome string | What we tell servers we are |
 | `BUNSEN_BACKEND_PATH` | build output | Which backend `.so` to load |
 | `BUNSEN_HOST_PATH` | build output | WebKit host binary (used when `BUNSEN_ENGINE=webkit`) |
 | `BUNSEN_BLITZ_HOST_PATH` | build output | Blitz host binary (used when `BUNSEN_ENGINE=blitz`) |
@@ -70,6 +72,12 @@ scenario over **both** transports — if in-process and out-of-process ever
 diverge, that is where it shows. They need a display and skip themselves
 without one, which is why CI runs everything else.
 
+Tests open real windows. To keep them off your desktop, run a headless
+compositor and point `WAYLAND_DISPLAY` at it:
+
+    WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 sway -c /dev/null &
+    WAYLAND_DISPLAY=<its display> bun test packages/shell/src
+
 To try it by hand: `./run.sh`, then check that typing in the omnibox
 navigates, `localhost:3000`-style input goes to http rather than a search,
 ctrl-T/W/L work, middle-of-page links that open new tabs land beside their
@@ -78,26 +86,39 @@ restart.
 
 ## What works, and what does not
 
-Working: tabs, back/forward/reload/stop, omnibox with history suggestions,
-history in SQLite, favicons, persistent cookies and storage per profile,
-third-party cookies blocked, popup blocking, `target=_blank` opening real
-tabs, a renderer that can run in-process, out-of-process, or one process per
-tab, a second rendering engine, and MV3 extensions with background workers.
+Working: tabs and a tab strip, an omnibox with history suggestions,
+back/forward/reload/stop, keyboard shortcuts (ctrl-l/t/w/r/d, F5, alt-arrows)
+and keyboard scrolling, history and bookmarks in SQLite, session restore,
+downloads, favicons, persistent cookies and storage per profile, popup
+blocking, `target=_blank` and scripted `a.click()` opening real tabs, two
+rendering engines behind one ABI, and a renderer that can run in-process,
+out-of-process, or one process per tab.
 
-**The default engine has no visible chrome yet.** Blitz binds one document to
-one window and the chrome UI is a second document, so the tab strip and
-omnibox are not drawn on it. That is the next piece of work. `BUNSEN_ENGINE=webkit`
-gets you the full chrome UI on WebKitGTK in the meantime.
+**Page JavaScript runs on the default engine.** Blitz has no script engine of
+its own, so each document gets a Bun subprocess hosting a TypeScript DOM;
+scripts run there and their mutations come back as HTML that Stylo reparses.
+The DOM covers events with a real capture phase, selectors with combinators
+and `:nth-child`, `MutationObserver`, `customElements`, dynamically inserted
+scripts, `localStorage`, `fetch`/XHR and `document.cookie`. What it does not
+cover: `getComputedStyle` beyond inline style, Shadow DOM, and Media Source
+Extensions — so video does not play.
 
-Half-working: **extensions** load and run their background service workers
-with `storage`, `tabs` and `runtime` behind a permission check, but cannot
-inject content scripts yet — that needs a DOM we own, which is what the Blitz
-backend is for. See [`docs/extensions.md`](./docs/extensions.md).
+Measured against real sites: example.com, Hacker News, Wikipedia, GitHub and
+DuckDuckGo render with their scripts running. YouTube loads as itself rather
+than a browser-upgrade notice, but renders blank — it is a JS application far
+past what this engine implements.
+
+**Extensions** install straight from the Chrome Web Store: navigate to a
+listing and the CRX is fetched, unpacked and loaded. Content scripts inject
+into matching pages, `browser.storage`/`tabs`/`runtime` answer behind a
+permission check, and background service workers run in Bun Workers.
+uBlock Origin Lite installs and starts. Not there: `declarativeNetRequest`
+actually blocking anything, popups and options pages.
+
 **Process-per-tab** isolates renderers properly but gives each one its own
 window, because nothing can composite them into one yet.
 
-Not there yet: downloads, find-in-page, private windows, bookmarks, session
-restore, zoom, and a settings UI.
+Not there yet: find-in-page, private windows, zoom, and a settings UI.
 
 ## The boundary
 

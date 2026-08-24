@@ -221,3 +221,38 @@ test("a missing locale file leaves the placeholder rather than throwing", () => 
   expect(extension.manifest.name).toBe("__MSG_extName__");
   host.stop();
 });
+
+test("a leading slash means the extension root, not the filesystem root", async () => {
+  // Real store extensions write "/js/background.js"; uBlock Origin Lite does.
+  // Treating that as an absolute path refused to start their background page.
+  const root = extensionDir(
+    {
+      manifest_version: 3,
+      name: "Root Relative",
+      version: "1.0",
+      background: { service_worker: "/js/bg.js", type: "module" },
+    },
+  );
+  mkdirSync(join(root, "sample", "js"), { recursive: true });
+  writeFileSync(join(root, "sample", "js", "bg.js"), `await browser.runtime.getManifest();`);
+
+  const { shell } = bridge();
+  const host = new ExtensionHost(":memory:", shell);
+  const [extension] = host.loadAll(root).loaded;
+  await host.startBackground(extension);
+  host.stop();
+});
+
+test("climbing out of the extension directory is still refused", async () => {
+  const root = extensionDir({
+    manifest_version: 3,
+    name: "Escapee",
+    version: "1.0",
+    background: { service_worker: "/../../../etc/passwd", type: "module" },
+  });
+  const { shell } = bridge();
+  const host = new ExtensionHost(":memory:", shell);
+  const [extension] = host.loadAll(root).loaded;
+  await expect(host.startBackground(extension)).rejects.toThrow(/escapes/);
+  host.stop();
+});

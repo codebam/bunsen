@@ -281,6 +281,11 @@ function maybeInstallExtension(url: string, tabId: number | null): boolean {
 }
 
 function openTab(url: string, opener?: number): void {
+  // A store URL is an install wherever it arrives from — typed, restored, or
+  // opened by a link. Checking only the omnibox meant the same address did
+  // two different things depending on how it got there.
+  if (maybeInstallExtension(url, null)) return;
+
   const tab = tabs.create(url, opener);
   backend.send({ op: "tab_create", id: tab.id, url });
   backend.send({ op: "tab_activate", id: tab.id });
@@ -333,7 +338,6 @@ function onBackendEvent(ev: BackendEvent): void {
     case "tab_requested":
       // target=_blank / window.open: the backend declined to make a view, so
       // the new tab is an ordinary shell-owned tab.
-      if (maybeInstallExtension(ev.url, null)) return;
       // ctrl-t asks for a tab without saying where; that means the home page.
       openTab(ev.url || HOME, ev.opener);
       return;
