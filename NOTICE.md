@@ -21,6 +21,14 @@ Rust crates under MIT and/or Apache-2.0: `gtk4`, `webkit6`, `glib`,
 dependencies. Run `cargo tree` for the exhaustive list, or
 `cargo about generate` to regenerate this section mechanically.
 
+## Vendored
+
+- **blitz-net** — https://github.com/DioxusLabs/blitz — Apache-2.0 OR MIT.
+  `packages/blitz-net-bunsen` is a copy of blitz-net 0.3.0-beta.1 with one
+  change: the user agent is configurable. Upstream hardcodes a 2020 Firefox
+  string and appends it after any caller-supplied header, so it cannot be
+  overridden from outside the crate. The copy carries upstream's licence.
+
 ## Runtime
 
 - **Bun** — https://bun.sh — MIT. Executed as the host runtime; not linked into

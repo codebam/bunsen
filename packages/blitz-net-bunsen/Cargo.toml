@@ -1,0 +1,26 @@
+[package]
+name = "blitz-net-bunsen"
+version = "0.3.0-beta.1"
+edition = "2024"
+description = "Bunsen's copy of blitz-net, with a user agent we control"
+license = "Apache-2.0 OR MIT"
+
+[dependencies]
+blitz-traits = { version = "=0.3.0-beta.1", default-features = false }
+data-url = "0.3.1"
+directories = "6.0.0"
+http-cache = { version = "=1.0.0-alpha.6", features = ["url-standard"], default-features = false }
+http-cache-reqwest = { version = "=1.0.0-alpha.6", features = ["manager-cacache"], default-features = false }
+reqwest = { version = "0.13", features = ["charset", "native-tls", "form", "cookies", "http2"], default-features = false }
+reqwest-middleware = { version = "0.5.1", features = ["form"], default-features = false }
+tokio = { version = "1.42", features = ["sync", "time"] }
+
+[features]
+default = ["cookies", "cache", "http2"]
+cookies = []
+cache = []
+http2 = []
+# Upstream gates its logging on this; declared so the cfgs it left behind are
+# recognised rather than warned about. We do not enable it.
+tracing = []
+multipart = []

@@ -17,7 +17,8 @@ Contributions are accepted under the same dual license.
 | GTK4, GLib, GDK | LGPL-2.1-or-later | **Dynamically** linked |
 | gtk4-rs, webkit6-rs, glib-rs | MIT | Permissive |
 | serde, serde_json, libc, async-channel | MIT OR Apache-2.0 | Permissive |
-| Blitz, Taffy, Parley, Vello, wgpu (phase 2) | Apache-2.0 OR MIT | Permissive |
+| Blitz, Taffy, Parley, Vello, wgpu | Apache-2.0 OR MIT | Permissive |
+| blitz-net (vendored, see NOTICE.md) | Apache-2.0 OR MIT | Copied with one change, upstream licence kept |
 | Stylo (phase 2) | MPL-2.0 | File-level copyleft; see below |
 
 ### The LGPL libraries

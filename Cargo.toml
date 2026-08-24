@@ -4,6 +4,7 @@ members = [
   "packages/protocol",
   "packages/render-webkit",
   "packages/render-blitz",
+  "packages/blitz-net-bunsen",
 ]
 
 [profile.release]

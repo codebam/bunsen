@@ -14,10 +14,12 @@ bunsen-protocol = { path = "../protocol" }
 
 blitz-dom = "0.3.0-beta.1"
 blitz-html = "0.3.0-beta.1"
+# A vendored blitz-net: identical but for a user agent we can set. Upstream
+# pins a 2020 Firefox string and appends it after caller headers, so it cannot
+# be overridden from outside the crate — see that file's comment.
 # `cookies` keeps a session alive across requests, which is the difference
 # between a renderer and a browser: without it nothing stays logged in.
-# `http2` and `cache` are what real sites expect of a client.
-blitz-net = { version = "0.3.0-beta.1", features = ["cookies", "http2", "cache"] }
+blitz-net = { package = "blitz-net-bunsen", path = "../blitz-net-bunsen" }
 blitz-shell = "0.3.0-beta.1"
 blitz-traits = "0.3.0-beta.1"
 anyrender_vello = "0.12"

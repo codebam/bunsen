@@ -4,14 +4,9 @@
 
 use blitz_traits::net::Request;
 
-// The user agent is NOT ours to set today.
-//
-// blitz-net hardcodes "Firefox/81.0" (a 2020 build) and appends it after any
-// headers we supply, so a User-Agent we insert here is sent as a second
-// header rather than replacing theirs. Enough of the web gates on this that
-// it matters — YouTube redirects that string straight to /supported_browsers,
-// which is exactly what we see. Fixing it properly means patching blitz-net
-// to make the agent configurable; setting it here only looks like a fix.
+// The user agent lives in the vendored net crate, not here: upstream
+// blitz-net appends its own after any header a caller supplies, so setting
+// one on the Request is silently discarded. See blitz-net-bunsen.
 
 /// Fetch a document over Blitz's net provider. Returns the final URL (after
 /// redirects) and the body.
