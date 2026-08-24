@@ -1,0 +1,29 @@
+[package]
+name = "bunsen-render-blitz"
+version = "0.1.0"
+edition = "2021"
+description = "Bunsen render backend: Blitz (Stylo + Taffy + Parley + Vello) behind the bunsen_render ABI"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/codebam/bunsen"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bunsen-protocol = { path = "../protocol" }
+
+blitz-dom = "0.3.0-beta.1"
+blitz-html = "0.3.0-beta.1"
+blitz-net = "0.3.0-beta.1"
+blitz-shell = "0.3.0-beta.1"
+blitz-traits = "0.3.0-beta.1"
+anyrender_vello = "0.12"
+winit = "=0.31.0-beta.2"
+
+async-channel = "2"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+url = "2"
+
+[[bin]]
+name = "bunsen-render-blitz-host"
+path = "src/bin/host.rs"

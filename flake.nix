@@ -13,26 +13,36 @@
 
         # Runtime graphics/network stack. Linked dynamically — see LICENSING.md
         # for why that matters with LGPL dependencies.
-        nativeDeps = with pkgs; [ gtk4 webkitgtk_6_0 glib glib-networking ];
+        nativeDeps = with pkgs; [
+          # WebKitGTK backend
+          gtk4 webkitgtk_6_0 glib glib-networking
+          # Blitz backend: wgpu needs a Vulkan loader, Parley needs fontconfig,
+          # and reqwest's default TLS wants OpenSSL.
+          vulkan-loader libxkbcommon fontconfig openssl
+          wayland libGL
+        ];
 
-        renderBackend = pkgs.rustPlatform.buildRustPackage {
-          pname = "bunsen-render-webkit";
+        # Both backends come out of one workspace build: they share the
+        # protocol crate, and building them together is what keeps them in
+        # step.
+        renderBackends = pkgs.rustPlatform.buildRustPackage {
+          pname = "bunsen-render-backends";
           version = "0.1.0";
-          src = ./packages/render-webkit;
-          cargoLock.lockFile = ./packages/render-webkit/Cargo.lock;
+          src = ./.;
+          cargoLock.lockFile = ./Cargo.lock;
 
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = nativeDeps;
 
-          # buildRustPackage installs binaries but not cdylibs; the shell needs
-          # both, one per transport.
+          # buildRustPackage installs binaries but not cdylibs, and the FFI
+          # transport needs the cdylib.
           postInstall = ''
             mkdir -p $out/lib
             find target -name 'libbunsen_render_webkit.so' -exec cp {} $out/lib/ \;
           '';
 
           meta = with pkgs.lib; {
-            description = "Bunsen render backend (WebKitGTK)";
+            description = "Bunsen render backends (WebKitGTK and Blitz)";
             license = with licenses; [ mit asl20 ];
             platforms = platforms.linux;
           };
@@ -53,8 +63,10 @@
 
             makeWrapper ${pkgs.bun}/bin/bun $out/bin/bunsen \
               --add-flags "run $out/share/bunsen/src/main.ts" \
-              --set BUNSEN_BACKEND_PATH ${renderBackend}/lib/libbunsen_render_webkit.so \
-              --set BUNSEN_HOST_PATH ${renderBackend}/bin/bunsen-render-host \
+              --set BUNSEN_BACKEND_PATH ${renderBackends}/lib/libbunsen_render_webkit.so \
+              --set BUNSEN_HOST_PATH ${renderBackends}/bin/bunsen-render-host \
+              --set BUNSEN_BLITZ_HOST_PATH ${renderBackends}/bin/bunsen-render-blitz-host \
+              --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath nativeDeps}" \
               --set GIO_MODULE_DIR ${pkgs.glib-networking}/lib/gio/modules \
               --set GIO_EXTRA_MODULES ${pkgs.glib-networking}/lib/gio/modules \
               --set WEBKIT_DISABLE_DMABUF_RENDERER 1 \
@@ -73,7 +85,7 @@
         };
       in {
         packages = {
-          inherit bunsen renderBackend;
+          inherit bunsen renderBackends;
           default = bunsen;
         };
 
@@ -91,8 +103,10 @@
           shellHook = ''
             export GIO_MODULE_DIR=${pkgs.glib-networking}/lib/gio/modules
             export WEBKIT_DISABLE_DMABUF_RENDERER=1
-            export BUNSEN_BACKEND_PATH="$PWD/packages/render-webkit/target/debug/libbunsen_render_webkit.so"
-            export BUNSEN_HOST_PATH="$PWD/packages/render-webkit/target/debug/bunsen-render-host"
+            export BUNSEN_BACKEND_PATH="$PWD/target/debug/libbunsen_render_webkit.so"
+            export BUNSEN_HOST_PATH="$PWD/target/debug/bunsen-render-host"
+            export BUNSEN_BLITZ_HOST_PATH="$PWD/target/debug/bunsen-render-blitz-host"
+            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath nativeDeps}:$LD_LIBRARY_PATH"
           '';
         };
       });

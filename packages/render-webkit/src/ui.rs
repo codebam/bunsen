@@ -13,9 +13,9 @@ use gtk::gdk::prelude::TextureExt;
 use gtk::prelude::*;
 use webkit6::prelude::*;
 
-use crate::codec::decode_commands;
-use crate::eventq::EventQueue;
-use crate::protocol::{Command, Config, Event, TabId};
+use bunsen_protocol::codec::decode_commands;
+use bunsen_protocol::eventq::EventQueue;
+use bunsen_protocol::protocol::{Command, Config, Event, TabId};
 
 struct Ui {
     session: webkit6::NetworkSession,

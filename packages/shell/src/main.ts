@@ -18,13 +18,22 @@ import { TabStore } from "./tabs";
 
 const CHROME_HEIGHT = 76;
 const HOME = Bun.env.BUNSEN_HOME_PAGE ?? "https://duckduckgo.com";
-const BUILD = join(import.meta.dir, "../../render-webkit/target/debug");
+const BUILD = join(import.meta.dir, "../../../target/debug");
+// `webkit` is the default because it is the one with a chrome UI. `blitz`
+// renders with Stylo/Taffy/Vello and answers the identical protocol, but does
+// not composite the chrome yet — see packages/render-blitz/src/lib.rs.
+const ENGINE = Bun.env.BUNSEN_ENGINE ?? "webkit";
 const BACKEND_PATH =
   Bun.env.BUNSEN_BACKEND_PATH ?? join(BUILD, "libbunsen_render_webkit.so");
-const HOST_PATH = Bun.env.BUNSEN_HOST_PATH ?? join(BUILD, "bunsen-render-host");
+const HOST_PATH =
+  Bun.env.BUNSEN_HOST_PATH ??
+  join(BUILD, ENGINE === "blitz" ? "bunsen-render-blitz-host" : "bunsen-render-host");
 // FFI by default: one less context switch per batch. Socket puts the renderer
 // in its own process, so a renderer crash costs the window, not the browser.
-const TRANSPORT = (Bun.env.BUNSEN_TRANSPORT ?? "ffi") as TransportKind;
+// Blitz has no in-process path here, since the shell process is already
+// claimed by whichever toolkit got there first.
+const TRANSPORT = (Bun.env.BUNSEN_TRANSPORT ??
+  (ENGINE === "blitz" ? "socket" : "ffi")) as TransportKind;
 const PROFILE =
   Bun.env.BUNSEN_PROFILE ??
   join(
@@ -95,7 +104,7 @@ await backend.start({
 
 openTab(HOME);
 console.log(
-  `bunsen: chrome on ${chromeUrl}, transport ${TRANSPORT}, profile ${PROFILE}`,
+  `bunsen: chrome on ${chromeUrl}, engine ${ENGINE}, transport ${TRANSPORT}, profile ${PROFILE}`,
 );
 
 // ---------------------------------------------------------------- chrome UI

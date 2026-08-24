@@ -45,6 +45,14 @@ pub mod ev {
     pub const WINDOW_CLOSED: u16 = 10;
 }
 
+/// A batch holding a single AppQuit, which the ABI's stop path needs to send
+/// without building a command vector.
+pub fn quit_batch() -> Vec<u8> {
+    let mut buf = 1u32.to_le_bytes().to_vec();
+    buf.extend_from_slice(&op::APP_QUIT.to_le_bytes());
+    buf
+}
+
 #[derive(Debug)]
 pub struct DecodeError(pub &'static str);
 

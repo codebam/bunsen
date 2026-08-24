@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+  "packages/protocol",
+  "packages/render-webkit",
+  "packages/render-blitz",
+]
+
+[profile.release]
+lto = true

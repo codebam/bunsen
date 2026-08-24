@@ -2,7 +2,7 @@
 name = "bunsen-render-webkit"
 version = "0.1.0"
 edition = "2021"
-description = "Phase-0 Bunsen render backend: WebKitGTK behind the bunsen_render ABI"
+description = "Bunsen render backend: WebKitGTK behind the bunsen_render ABI"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/codebam/bunsen"
 
@@ -10,16 +10,11 @@ repository = "https://github.com/codebam/bunsen"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+bunsen-protocol = { path = "../protocol" }
 gtk = { package = "gtk4", version = "0.9", features = ["v4_10"] }
 webkit6 = "0.4"
 glib = "0.20"
 async-channel = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-libc = "0.2"
-
-[profile.release]
-lto = true
 
 [[bin]]
 name = "bunsen-render-host"

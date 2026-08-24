@@ -11,9 +11,11 @@ import { createBackend, type TransportKind } from "./client";
 import { FfiTransport } from "./transport";
 import type { BackendEvent } from "./types";
 
-const BUILD = join(import.meta.dir, "../../../render-webkit/target/debug");
+const BUILD = join(import.meta.dir, "../../../../target/debug");
 const LIB = Bun.env.BUNSEN_BACKEND_PATH ?? join(BUILD, "libbunsen_render_webkit.so");
 const HOST = Bun.env.BUNSEN_HOST_PATH ?? join(BUILD, "bunsen-render-host");
+const BLITZ_HOST =
+  Bun.env.BUNSEN_BLITZ_HOST_PATH ?? join(BUILD, "bunsen-render-blitz-host");
 
 const headless = !Bun.env.DISPLAY && !Bun.env.WAYLAND_DISPLAY;
 
@@ -160,4 +162,42 @@ test.skipIf(headless)("cookies survive a restart when a profile directory is set
     server.stop(true);
     await Bun.$`rm -rf ${profile}`.quiet().nothrow();
   }
+}, 40000);
+
+test.skipIf(headless)("blitz: the second backend answers the same protocol", async () => {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () =>
+      new Response(
+        "<title>Rendered by Blitz</title><style>h1{color:rebeccapurple}</style><h1>hello</h1>",
+        { headers: { "content-type": "text/html" } },
+      ),
+  });
+  const pageUrl = `http://127.0.0.1:${server.port}/`;
+
+  // Socket transport only: two windowing toolkits cannot both own a process,
+  // and the WebKit tests above already claimed this one.
+  const backend = createBackend("socket", { library: LIB, host: BLITZ_HOST });
+  const seen: BackendEvent[] = [];
+  backend.onEvent((ev) => seen.push(ev));
+
+  await backend.start({ chrome_url: "about:blank", width: 800, height: 600 });
+
+  backend.send({ op: "tab_create", id: 1, url: pageUrl });
+  backend.send({ op: "tab_activate", id: 1 });
+  backend.flush();
+
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (seen.some((e) => e.ev === "tab_title" && e.title === "Rendered by Blitz")) break;
+    await Bun.sleep(50);
+  }
+  backend.stop();
+  server.stop(true);
+
+  expect(seen.some((e) => e.ev === "ready")).toBe(true);
+  expect(seen.some((e) => e.ev === "tab_title" && e.title === "Rendered by Blitz")).toBe(true);
+  expect(seen.some((e) => e.ev === "tab_url" && e.url === pageUrl)).toBe(true);
+  expect(seen.some((e) => e.ev === "tab_loading" && e.loading === false)).toBe(true);
 }, 40000);
