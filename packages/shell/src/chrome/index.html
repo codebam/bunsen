@@ -1,0 +1,180 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Bunsen</title>
+<style>
+  :root {
+    --bg: #1b1c1f; --bg-soft: #26282d; --fg: #e6e7ea; --fg-dim: #9aa0aa;
+    --accent: #f0b429; --line: #35373d;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f2f3f5; --bg-soft:#fff; --fg:#1b1c1f; --fg-dim:#666b74; --line:#d8dade; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 13px/1.4 system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  #tabs { display: flex; gap: 2px; padding: 4px 6px 0; overflow-x: auto; scrollbar-width: none; }
+  .tab {
+    display: flex; align-items: center; gap: 6px;
+    min-width: 0; max-width: 220px; padding: 5px 8px;
+    background: transparent; border: 0; border-radius: 6px 6px 0 0;
+    color: var(--fg-dim); font: inherit; cursor: default; white-space: nowrap;
+  }
+  .tab.active { background: var(--bg-soft); color: var(--fg); }
+  .tab .label { overflow: hidden; text-overflow: ellipsis; }
+  .tab .spin { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; opacity: 0; }
+  .tab.loading .spin { opacity: 1; animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  .tab .x { opacity: .5; padding: 0 2px; }
+  .tab .x:hover { opacity: 1; }
+  #newtab { background: transparent; border: 0; color: var(--fg-dim); font-size: 16px; padding: 0 8px; }
+  #bar { display: flex; align-items: center; gap: 4px; padding: 5px 8px; background: var(--bg-soft); }
+  #bar button {
+    background: transparent; border: 0; color: var(--fg); font-size: 14px;
+    width: 26px; height: 26px; border-radius: 5px;
+  }
+  #bar button:disabled { opacity: .3; }
+  #bar button:not(:disabled):hover { background: var(--bg); }
+  #omnibox {
+    flex: 1; min-width: 0; height: 28px; padding: 0 10px;
+    background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 14px; font: inherit; outline: none;
+  }
+  #omnibox:focus { border-color: var(--accent); }
+  #progress { height: 2px; background: var(--accent); width: 0; transition: width .12s linear; }
+  #progress.idle { opacity: 0; }
+  #suggest {
+    position: absolute; top: 60px; left: 100px; right: 44px; z-index: 9;
+    background: var(--bg-soft); border: 1px solid var(--line); border-radius: 8px;
+    overflow: hidden; display: none;
+  }
+  #suggest div { padding: 6px 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #suggest div:hover, #suggest div.sel { background: var(--bg); }
+  #suggest .u { color: var(--fg-dim); font-size: 11px; }
+</style>
+
+<div id="tabs"></div>
+<div id="bar">
+  <button id="back" title="Back">‹</button>
+  <button id="fwd" title="Forward">›</button>
+  <button id="reload" title="Reload">⟳</button>
+  <input id="omnibox" placeholder="Search or enter address" spellcheck="false" />
+</div>
+<div id="progress" class="idle"></div>
+<div id="suggest"></div>
+
+<script type="module">
+  const ws = new WebSocket(`ws://${location.host}/chrome`);
+  const send = (m) => ws.readyState === 1 && ws.send(JSON.stringify(m));
+
+  const $ = (id) => document.getElementById(id);
+  const omni = $("omnibox");
+  let state = { tabs: [], activeId: null };
+  let editing = false;
+  let sel = -1;
+  let suggestions = [];
+
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.t === "state") { state = m; render(); }
+    if (m.t === "suggestions") { suggestions = m.items; renderSuggest(); }
+  };
+
+  function activeTab() {
+    return state.tabs.find((t) => t.id === state.activeId);
+  }
+
+  function render() {
+    const tabs = $("tabs");
+    tabs.replaceChildren(
+      ...state.tabs.map((t) => {
+        const el = document.createElement("div");
+        el.className = "tab" + (t.id === state.activeId ? " active" : "") + (t.loading ? " loading" : "");
+        el.onmousedown = () => send({ t: "activate", id: t.id });
+        el.innerHTML = `<span class="spin"></span><span class="label"></span><span class="x">×</span>`;
+        el.querySelector(".label").textContent = t.title || t.url || "New Tab";
+        el.title = t.url;
+        el.querySelector(".x").onmousedown = (ev) => {
+          ev.stopPropagation();
+          send({ t: "close", id: t.id });
+        };
+        return el;
+      }),
+    );
+    const plus = document.createElement("button");
+    plus.id = "newtab";
+    plus.textContent = "+";
+    plus.onclick = () => send({ t: "newtab" });
+    tabs.append(plus);
+
+    const a = activeTab();
+    $("back").disabled = !a?.canBack;
+    $("fwd").disabled = !a?.canForward;
+    $("reload").textContent = a?.loading ? "×" : "⟳";
+    if (!editing) omni.value = a?.url ?? "";
+
+    const p = $("progress");
+    const busy = !!a?.loading;
+    p.classList.toggle("idle", !busy);
+    p.style.width = busy ? `${Math.max(5, (a.progress ?? 0) * 100)}%` : "0";
+  }
+
+  function renderSuggest() {
+    const box = $("suggest");
+    if (!editing || suggestions.length === 0) {
+      box.style.display = "none";
+      return;
+    }
+    box.style.display = "block";
+    box.replaceChildren(
+      ...suggestions.map((s, i) => {
+        const d = document.createElement("div");
+        if (i === sel) d.className = "sel";
+        d.innerHTML = `<div></div><div class="u"></div>`;
+        d.children[0].textContent = s.title || s.url;
+        d.children[1].textContent = s.url;
+        d.onmousedown = () => go(s.url);
+        return d;
+      }),
+    );
+  }
+
+  function go(text) {
+    editing = false;
+    suggestions = [];
+    renderSuggest();
+    omni.blur();
+    send({ t: "navigate", url: text });
+  }
+
+  omni.addEventListener("focus", () => { editing = true; omni.select(); });
+  omni.addEventListener("blur", () => {
+    editing = false;
+    setTimeout(() => { suggestions = []; renderSuggest(); render(); }, 120);
+  });
+  omni.addEventListener("input", () => {
+    sel = -1;
+    send({ t: "suggest", q: omni.value });
+  });
+  omni.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") go(sel >= 0 ? suggestions[sel].url : omni.value);
+    else if (e.key === "Escape") { omni.value = activeTab()?.url ?? ""; omni.blur(); }
+    else if (e.key === "ArrowDown") { sel = Math.min(sel + 1, suggestions.length - 1); renderSuggest(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { sel = Math.max(sel - 1, -1); renderSuggest(); e.preventDefault(); }
+  });
+
+  $("back").onclick = () => send({ t: "back" });
+  $("fwd").onclick = () => send({ t: "forward" });
+  $("reload").onclick = () => send({ t: activeTab()?.loading ? "stop" : "reload" });
+
+  addEventListener("keydown", (e) => {
+    if (!e.ctrlKey) return;
+    if (e.key === "l") { omni.focus(); e.preventDefault(); }
+    if (e.key === "t") { send({ t: "newtab" }); e.preventDefault(); }
+    if (e.key === "w") { send({ t: "close", id: state.activeId }); e.preventDefault(); }
+    if (e.key === "r") { send({ t: "reload" }); e.preventDefault(); }
+  });
+</script>
