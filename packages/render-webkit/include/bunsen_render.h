@@ -59,10 +59,13 @@ int32_t bunsen_backend_submit(BunsenBackend *b, const uint8_t *buf, size_t len);
 int32_t bunsen_backend_poll(BunsenBackend *b, uint8_t *out, size_t out_cap);
 
 /*
- * An eventfd that becomes readable when events are pending, so the shell can
- * park on it instead of polling on a timer. Returns -1 if unsupported.
+ * Register a wakeup callback, invoked from a dedicated backend thread each
+ * time events become available, so the shell need not poll on a timer. The
+ * callback must tolerate being called from a foreign thread and should do
+ * nothing but schedule a bunsen_backend_poll on the shell's own thread.
+ * May be set once per backend.
  */
-int32_t bunsen_backend_wakeup_fd(BunsenBackend *b);
+int32_t bunsen_backend_set_wakeup(BunsenBackend *b, void (*callback)(void));
 
 /* Stop the UI thread and free the handle. Safe to call once. */
 void bunsen_backend_stop(BunsenBackend *b);

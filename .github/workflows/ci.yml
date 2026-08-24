@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build render backend
+        run: nix develop --command cargo build --manifest-path packages/render-webkit/Cargo.toml
+
+      - name: Rust formatting
+        run: nix develop --command cargo fmt --manifest-path packages/render-webkit/Cargo.toml -- --check
+
+      - name: Clippy
+        run: nix develop --command cargo clippy --manifest-path packages/render-webkit/Cargo.toml -- -D warnings
+
+      # The FFI test needs a display and skips itself here; the shell unit
+      # tests do not.
+      - name: Shell tests
+        run: nix develop --command bun test packages/shell/src

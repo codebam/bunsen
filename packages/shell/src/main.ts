@@ -138,8 +138,8 @@ function pushState(): void {
 
 // ------------------------------------------------------------------- tabs
 
-function openTab(url: string): void {
-  const tab = tabs.create(url);
+function openTab(url: string, opener?: number): void {
+  const tab = tabs.create(url, opener);
   backend.send({ op: "tab_create", id: tab.id, url });
   backend.send({ op: "tab_activate", id: tab.id });
   tabs.activate(tab.id);
@@ -180,6 +180,14 @@ function onBackendEvent(ev: BackendEvent): void {
     case "tab_failed":
       tabs.update(ev.id, { error: ev.message, loading: false });
       break;
+    case "tab_favicon":
+      tabs.update(ev.id, { favicon: ev.data_url });
+      break;
+    case "tab_requested":
+      // target=_blank / window.open: the backend declined to make a view, so
+      // the new tab is an ordinary shell-owned tab.
+      openTab(ev.url, ev.opener);
+      return;
     case "window_closed":
       return shutdown();
     case "ready":

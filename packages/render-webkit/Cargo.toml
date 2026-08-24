@@ -10,7 +10,7 @@ repository = "https://github.com/codebam/bunsen"
 crate-type = ["cdylib"]
 
 [dependencies]
-gtk = { package = "gtk4", version = "0.9" }
+gtk = { package = "gtk4", version = "0.9", features = ["v4_10"] }
 webkit6 = "0.4"
 glib = "0.20"
 async-channel = "2"

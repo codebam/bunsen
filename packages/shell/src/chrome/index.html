@@ -26,6 +26,7 @@
   .tab.active { background: var(--bg-soft); color: var(--fg); }
   .tab .label { overflow: hidden; text-overflow: ellipsis; }
   .tab .spin { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; opacity: 0; }
+  .tab img.icon { width: 14px; height: 14px; flex: none; border-radius: 2px; }
   .tab.loading .spin { opacity: 1; animation: pulse 1s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: .25; } }
   .tab .x { opacity: .5; padding: 0 2px; }
@@ -94,7 +95,8 @@
         const el = document.createElement("div");
         el.className = "tab" + (t.id === state.activeId ? " active" : "") + (t.loading ? " loading" : "");
         el.onmousedown = () => send({ t: "activate", id: t.id });
-        el.innerHTML = `<span class="spin"></span><span class="label"></span><span class="x">×</span>`;
+        const icon = t.favicon && !t.loading ? `<img class="icon" src="${t.favicon}" alt="" />` : "";
+        el.innerHTML = `<span class="spin"></span>${icon}<span class="label"></span><span class="x">×</span>`;
         el.querySelector(".label").textContent = t.title || t.url || "New Tab";
         el.title = t.url;
         el.querySelector(".x").onmousedown = (ev) => {

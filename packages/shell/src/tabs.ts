@@ -14,6 +14,7 @@ export interface Tab {
   progress: number;
   canBack: boolean;
   canForward: boolean;
+  favicon: string | null;
   error: string | null;
 }
 
@@ -23,7 +24,7 @@ export class TabStore {
   #active: TabId | null = null;
   #nextId = 1;
 
-  create(url: string): Tab {
+  create(url: string, opener?: TabId): Tab {
     const tab: Tab = {
       id: this.#nextId++,
       url,
@@ -32,10 +33,13 @@ export class TabStore {
       progress: 0,
       canBack: false,
       canForward: false,
+      favicon: null,
       error: null,
     };
     this.#tabs.set(tab.id, tab);
-    this.#order.push(tab.id);
+    const at = opener === undefined ? -1 : this.#order.indexOf(opener);
+    if (at >= 0) this.#order.splice(at + 1, 0, tab.id);
+    else this.#order.push(tab.id);
     if (this.#active === null) this.#active = tab.id;
     return tab;
   }

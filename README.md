@@ -12,7 +12,7 @@ forking Bun.
     packages/render-webkit/    phase-0 backend: WebKitGTK (GTK4 + WebKit 6)
       include/bunsen_render.h  THE CONTRACT — read this first
       src/protocol.rs          command/event wire types (engine-agnostic)
-      src/eventq.rs            GTK-thread → Bun-thread queue + eventfd
+      src/eventq.rs            GTK-thread → Bun-thread queue + wakeup eventfd
       src/ui.rs                window, chrome view, one WebView per tab
       src/lib.rs               the five exported ABI functions
     packages/shell/            the Bun side
@@ -46,11 +46,18 @@ Two rules make the seam cheap now and relocatable later:
 Encoding is JSON while the protocol is still moving. Swapping in a binary
 format touches the two codecs and nothing else.
 
+Events flow the other way without polling: a backend thread parks on an
+eventfd and calls the wakeup callback registered by
+`bunsen_backend_set_wakeup`, which on the Bun side is a threadsafe
+`JSCallback` that schedules a drain on the JS loop.
+
 ## Roadmap
 
 - **Phase 0 — done.** Real browser on the system webview. Establishes the ABI.
-- **Phase 1 — protocol hardening.** Binary encoding, eventfd-driven wakeups
-  instead of the 8ms poll, per-tab process transport.
+- **Phase 1 — in progress.** Wakeup-driven event delivery is done: a backend
+  notifier thread parks on an eventfd and pokes a threadsafe `JSCallback`, so
+  the shell no longer polls (a 250ms timer remains only as a safety net).
+  Remaining: binary encoding, per-tab process transport.
 - **Phase 2 — Blitz backend.** Stylo + Taffy + Parley + Vello behind the same
   header. Shell code does not change.
 - **Phase 3 — the rest of a browser.** Event dispatch, forms, session history,

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+#![deny(unsafe_op_in_unsafe_fn)]
 //! Phase-0 Bunsen render backend: WebKitGTK behind `include/bunsen_render.h`.
 //!
 //! The exported surface is five functions. Everything else the shell wants to
@@ -14,6 +15,11 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use eventq::EventQueue;
+
+// Every exported function is `unsafe`: they take raw pointers from a foreign
+// caller, and the caller is the one who must guarantee those are the handles
+// and buffers this library handed out. The bodies below still spell out each
+// dereference explicitly rather than relying on the function-wide waiver.
 use protocol::Config;
 
 pub const BUNSEN_OK: i32 = 0;
@@ -24,10 +30,14 @@ pub struct BunsenBackend {
     commands: async_channel::Sender<Vec<u8>>,
     events: Arc<EventQueue>,
     thread: Option<JoinHandle<()>>,
+    notifier: Option<JoinHandle<()>>,
 }
 
+/// # Safety
+/// `config_json` must be a valid NUL-terminated UTF-8 string. The returned
+/// handle must be released with [`bunsen_backend_stop`] exactly once.
 #[no_mangle]
-pub extern "C" fn bunsen_backend_start(config_json: *const c_char) -> *mut BunsenBackend {
+pub unsafe extern "C" fn bunsen_backend_start(config_json: *const c_char) -> *mut BunsenBackend {
     if config_json.is_null() {
         return std::ptr::null_mut();
     }
@@ -56,11 +66,15 @@ pub extern "C" fn bunsen_backend_start(config_json: *const c_char) -> *mut Bunse
         commands: tx,
         events,
         thread: Some(thread),
+        notifier: None,
     }))
 }
 
+/// # Safety
+/// `b` must be a live handle from [`bunsen_backend_start`], and `buf` must
+/// point to `len` readable bytes. The bytes are copied before returning.
 #[no_mangle]
-pub extern "C" fn bunsen_backend_submit(
+pub unsafe extern "C" fn bunsen_backend_submit(
     b: *mut BunsenBackend,
     buf: *const u8,
     len: usize,
@@ -79,8 +93,15 @@ pub extern "C" fn bunsen_backend_submit(
     }
 }
 
+/// # Safety
+/// `b` must be a live handle from [`bunsen_backend_start`], and `out` must
+/// point to `out_cap` writable bytes.
 #[no_mangle]
-pub extern "C" fn bunsen_backend_poll(b: *mut BunsenBackend, out: *mut u8, out_cap: usize) -> i32 {
+pub unsafe extern "C" fn bunsen_backend_poll(
+    b: *mut BunsenBackend,
+    out: *mut u8,
+    out_cap: usize,
+) -> i32 {
     let b = match unsafe { b.as_ref() } {
         Some(b) => b,
         None => return BUNSEN_ERR,
@@ -95,23 +116,66 @@ pub extern "C" fn bunsen_backend_poll(b: *mut BunsenBackend, out: *mut u8, out_c
     }
 }
 
+/// Register a callback fired (from a dedicated thread) whenever events become
+/// available, so the shell can stop polling on a timer. The callback must be
+/// safe to invoke from a foreign thread; on the Bun side that means a
+/// threadsafe JSCallback.
+/// # Safety
+/// `b` must be a live handle from [`bunsen_backend_start`], and `callback`
+/// must remain valid until the handle is stopped. It is invoked from a
+/// backend-owned thread.
 #[no_mangle]
-pub extern "C" fn bunsen_backend_wakeup_fd(b: *mut BunsenBackend) -> i32 {
-    match unsafe { b.as_ref() } {
-        Some(b) => b.events.wakeup_fd(),
-        None => -1,
+pub unsafe extern "C" fn bunsen_backend_set_wakeup(
+    b: *mut BunsenBackend,
+    callback: Option<extern "C" fn()>,
+) -> i32 {
+    let backend = match unsafe { b.as_mut() } {
+        Some(b) => b,
+        None => return BUNSEN_ERR,
+    };
+    let callback = match callback {
+        Some(c) => c,
+        None => return BUNSEN_ERR,
+    };
+    if backend.notifier.is_some() {
+        return BUNSEN_ERR;
+    }
+
+    let events = backend.events.clone();
+    backend.notifier = std::thread::Builder::new()
+        .name("bunsen-notify".into())
+        .spawn(move || {
+            while events.wait() {
+                callback();
+            }
+        })
+        .ok();
+
+    if backend.notifier.is_some() {
+        BUNSEN_OK
+    } else {
+        BUNSEN_ERR
     }
 }
 
+/// # Safety
+/// `b` must be a live handle from [`bunsen_backend_start`] and must not be
+/// used afterwards. Safe to call with NULL.
 #[no_mangle]
-pub extern "C" fn bunsen_backend_stop(b: *mut BunsenBackend) {
+pub unsafe extern "C" fn bunsen_backend_stop(b: *mut BunsenBackend) {
     if b.is_null() {
         return;
     }
     let mut backend = unsafe { Box::from_raw(b) };
-    let _ = backend.commands.send_blocking(br#"[{"op":"app_quit"}]"#.to_vec());
+    let _ = backend
+        .commands
+        .send_blocking(br#"[{"op":"app_quit"}]"#.to_vec());
     backend.commands.close();
     if let Some(t) = backend.thread.take() {
+        let _ = t.join();
+    }
+    backend.events.shutdown();
+    if let Some(t) = backend.notifier.take() {
         let _ = t.join();
     }
 }

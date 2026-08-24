@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gtk::gdk::prelude::TextureExt;
 use gtk::prelude::*;
 use webkit6::prelude::*;
 
@@ -45,6 +46,13 @@ pub fn run(cfg: Config, commands: async_channel::Receiver<Vec<u8>>, events: Arc<
         .build();
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+
+    // Favicons are off by default; the database is per network session.
+    if let Some(session) = webkit6::NetworkSession::default() {
+        if let Some(data) = session.website_data_manager() {
+            data.set_favicons_enabled(true);
+        }
+    }
 
     let chrome = webkit6::WebView::new();
     chrome.set_size_request(-1, cfg.chrome_height);
@@ -203,6 +211,36 @@ fn wire_signals(ui: &Rc<RefCell<Ui>>, id: TabId, view: &webkit6::WebView) {
     });
 
     let e = q.clone();
+    view.connect_favicon_notify(move |v| {
+        if let Some(url) = favicon_data_url(v) {
+            e.push(Event::TabFavicon { id, data_url: url });
+        }
+    });
+
+    // target=_blank and window.open() arrive as a new-window policy decision.
+    // We intercept there rather than on `create`, because `create` must hand
+    // WebKit a live view and tab lifetime belongs to the shell, not here.
+    let e = q.clone();
+    view.connect_decide_policy(move |_, decision, kind| {
+        if kind != webkit6::PolicyDecisionType::NewWindowAction {
+            return false;
+        }
+        let uri = decision
+            .downcast_ref::<webkit6::NavigationPolicyDecision>()
+            .and_then(|d| d.navigation_action())
+            .and_then(|mut a| a.request())
+            .and_then(|r| r.uri());
+        if let Some(uri) = uri {
+            e.push(Event::TabRequested {
+                opener: id,
+                url: uri.to_string(),
+            });
+        }
+        decision.ignore();
+        true
+    });
+
+    let e = q.clone();
     view.connect_load_failed(move |_, _, uri, err| {
         e.push(Event::TabFailed {
             id,
@@ -212,4 +250,16 @@ fn wire_signals(ui: &Rc<RefCell<Ui>>, id: TabId, view: &webkit6::WebView) {
         // false: let WebKit render its own error page.
         false
     });
+}
+
+/// WebKit hands us a GdkTexture; the chrome UI wants something it can put in
+/// an <img>. PNG round-trip is cheap at favicon sizes and avoids teaching the
+/// protocol about pixel formats.
+fn favicon_data_url(view: &webkit6::WebView) -> Option<String> {
+    let texture = view.favicon()?;
+    let png = texture.save_to_png_bytes();
+    Some(format!(
+        "data:image/png;base64,{}",
+        glib::base64_encode(&png)
+    ))
 }

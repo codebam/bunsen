@@ -8,7 +8,7 @@
  * one per mutation.
  */
 
-import { dlopen, FFIType, ptr } from "bun:ffi";
+import { dlopen, FFIType, JSCallback, ptr } from "bun:ffi";
 import type {
   BackendConfig,
   BackendEvent,
@@ -22,13 +22,17 @@ const SYMBOLS = {
   bunsen_backend_start: { args: [cstring], returns: pointer },
   bunsen_backend_submit: { args: [pointer, pointer, u64_fast], returns: i32 },
   bunsen_backend_poll: { args: [pointer, pointer, u64_fast], returns: i32 },
-  bunsen_backend_wakeup_fd: { args: [pointer], returns: i32 },
+  bunsen_backend_set_wakeup: { args: [pointer, pointer], returns: i32 },
   bunsen_backend_stop: { args: [pointer], returns: FFIType.void },
 } as const;
 
 const ERR_NOSPACE = -2;
-/** Idle poll cadence. The wakeup eventfd exists for when this becomes a cost. */
-const POLL_MS = 8;
+/**
+ * Safety net only. Events normally arrive through the backend's wakeup
+ * callback; this catches the case where registering it failed, and covers any
+ * event pushed in the window between start() and registration.
+ */
+const SAFETY_POLL_MS = 250;
 
 export class FfiBackend implements RenderBackend {
   #lib: ReturnType<typeof dlopen<typeof SYMBOLS>>;
@@ -37,9 +41,12 @@ export class FfiBackend implements RenderBackend {
   #flushScheduled = false;
   #handlers: ((ev: BackendEvent) => void)[] = [];
   #timer: ReturnType<typeof setInterval> | null = null;
+  #wakeup: JSCallback | null = null;
   #buf = new Uint8Array(64 * 1024);
   #decoder = new TextDecoder();
   #encoder = new TextEncoder();
+  /** Diagnostic: proves the wakeup path is carrying events, not the timer. */
+  readonly stats = { wakeups: 0, timerDrains: 0 };
 
   constructor(libraryPath: string) {
     this.#lib = dlopen(libraryPath, SYMBOLS);
@@ -52,12 +59,38 @@ export class FfiBackend implements RenderBackend {
     if (!handle) throw new Error("bunsen: backend failed to start");
     this.#handle = handle as number | bigint;
 
+    // Fired on a backend thread; hop to the JS loop before touching anything.
+    this.#wakeup = new JSCallback(
+      () => {
+        this.stats.wakeups++;
+        queueMicrotask(() => this.#drain());
+      },
+      {
+        args: [],
+        returns: FFIType.void,
+        threadsafe: true,
+      },
+    );
+    const registered =
+      this.#lib.symbols.bunsen_backend_set_wakeup(
+        this.#handle,
+        this.#wakeup.ptr,
+      ) === 0;
+    if (!registered) {
+      console.warn("bunsen: wakeup callback unavailable, falling back to polling");
+    }
+    this.#timer = setInterval(() => {
+      this.stats.timerDrains++;
+      this.#drain();
+    }, SAFETY_POLL_MS);
+    this.#timer.unref?.();
+
     return new Promise<void>((resolve) => {
       const onReady = (ev: BackendEvent) => {
         if (ev.ev === "ready") resolve();
       };
       this.#handlers.push(onReady);
-      this.#timer = setInterval(() => this.#drain(), POLL_MS);
+      this.#drain();
     });
   }
 
@@ -93,19 +126,21 @@ export class FfiBackend implements RenderBackend {
       this.#lib.symbols.bunsen_backend_stop(this.#handle);
       this.#handle = null;
     }
+    this.#wakeup?.close();
+    this.#wakeup = null;
   }
 
   #drain(): void {
     if (this.#handle === null) return;
-    let n = this.#lib.symbols.bunsen_backend_poll(
+    const n = this.#lib.symbols.bunsen_backend_poll(
       this.#handle,
       ptr(this.#buf),
       this.#buf.byteLength,
     );
     if (n === ERR_NOSPACE) {
-      // Nothing was consumed; widen and retry on the next tick.
+      // Nothing was consumed; widen and retry immediately.
       this.#buf = new Uint8Array(this.#buf.byteLength * 2);
-      return;
+      return this.#drain();
     }
     if (n <= 0) return;
 

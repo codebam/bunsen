@@ -29,6 +29,8 @@ export type BackendEvent =
   | { ev: "tab_loading"; id: TabId; loading: boolean }
   | { ev: "tab_nav"; id: TabId; can_back: boolean; can_forward: boolean }
   | { ev: "tab_failed"; id: TabId; url: string; message: string }
+  | { ev: "tab_favicon"; id: TabId; data_url: string }
+  | { ev: "tab_requested"; opener: TabId; url: string }
   | { ev: "window_closed" };
 
 export interface BackendConfig {
