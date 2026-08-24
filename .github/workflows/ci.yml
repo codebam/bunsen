@@ -29,3 +29,26 @@ jobs:
       # tests do not.
       - name: Shell tests
         run: nix develop --command bun test packages/shell/src
+
+  # The dev shell inherits whatever is on the developer's PATH, so a build
+  # dependency can be missing from the package and nobody notices until
+  # someone runs `nix run` on a clean machine. This job is that clean machine.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: nix build
+        run: nix build .#bunsen --print-build-logs
+
+      - name: The wrapper points at binaries that exist
+        run: |
+          test -x result/bin/bunsen
+          grep -o "BUNSEN_[A-Z_]*_PATH='[^']*'" result/bin/bunsen |
+            cut -d"'" -f2 |
+            while read -r path; do
+              echo "checking $path"
+              test -e "$path"
+            done

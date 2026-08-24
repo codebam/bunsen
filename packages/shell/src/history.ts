@@ -50,6 +50,19 @@ export class History {
       .run({ $url: url, $title: title, $now: Date.now() });
   }
 
+  /**
+   * Correct the title of a page already recorded, without counting a second
+   * visit. Engines settle the title whenever they like — WebKit usually after
+   * the load finishes — and a visit is not a new visit just because its name
+   * arrived late.
+   */
+  retitle(url: string, title: string): void {
+    if (!title || !/^https?:/.test(url)) return;
+    this.#db
+      .query(`UPDATE visits SET title = $title WHERE url = $url`)
+      .run({ $url: url, $title: title });
+  }
+
   /** Prefix/substring match over url and title, most-visited first. */
   suggest(query: string, limit = 8): HistoryEntry[] {
     if (!query.trim()) return [];

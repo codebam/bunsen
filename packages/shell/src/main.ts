@@ -19,6 +19,9 @@ import { resolve as resolveOmnibox } from "./omnibox";
 import { TabStore } from "./tabs";
 
 const CHROME_HEIGHT = 76;
+// Events start arriving during backend.start(), i.e. while this module is
+// still evaluating, so anything the handler touches must be defined up here.
+const DEBUG_EVENTS = Bun.env.BUNSEN_DEBUG_EVENTS === "1";
 const HOME = Bun.env.BUNSEN_HOME_PAGE ?? "https://duckduckgo.com";
 const BUILD = join(import.meta.dir, "../../../target/debug");
 // `webkit` is the default because it is the one with a chrome UI. `blitz`
@@ -27,9 +30,14 @@ const BUILD = join(import.meta.dir, "../../../target/debug");
 const ENGINE = Bun.env.BUNSEN_ENGINE ?? "webkit";
 const BACKEND_PATH =
   Bun.env.BUNSEN_BACKEND_PATH ?? join(BUILD, "libbunsen_render_webkit.so");
+// Each engine reads its own override. A single BUNSEN_HOST_PATH used to win
+// over BUNSEN_ENGINE, so anything that sets it — the dev shell, the Nix
+// wrapper — silently pinned the engine to WebKit while the banner still said
+// blitz.
 const HOST_PATH =
-  Bun.env.BUNSEN_HOST_PATH ??
-  join(BUILD, ENGINE === "blitz" ? "bunsen-render-blitz-host" : "bunsen-render-host");
+  ENGINE === "blitz"
+    ? Bun.env.BUNSEN_BLITZ_HOST_PATH ?? join(BUILD, "bunsen-render-blitz-host")
+    : Bun.env.BUNSEN_HOST_PATH ?? join(BUILD, "bunsen-render-host");
 // FFI by default: one less context switch per batch. Socket puts the renderer
 // in its own process, so a renderer crash costs the window, not the browser.
 // Blitz has no in-process path here, since the shell process is already
@@ -46,7 +54,9 @@ const PROFILE =
 
 const EXTENSIONS_DIR = Bun.env.BUNSEN_EXTENSIONS_DIR ?? join(PROFILE, "extensions");
 
-const history = new History();
+// History belongs to the profile like everything else; it used to land in
+// the default XDG path regardless of BUNSEN_PROFILE.
+const history = new History(join(PROFILE, "history.db"));
 const tabs = new TabStore();
 const chromeSockets = new Set<ServerWebSocket<unknown>>();
 
@@ -202,10 +212,15 @@ function closeTab(id: number | null): void {
 // --------------------------------------------------------- backend events
 
 function onBackendEvent(ev: BackendEvent): void {
+  if (DEBUG_EVENTS) console.log("bunsen: event", JSON.stringify(ev));
   switch (ev.ev) {
-    case "tab_title":
-      tabs.update(ev.id, { title: ev.title });
+    case "tab_title": {
+      const tab = tabs.update(ev.id, { title: ev.title });
+      // WebKit often settles the title after the load finishes, so the
+      // history row already exists with the URL standing in for a title.
+      if (tab && !tab.loading && !tab.error) history.retitle(tab.url, ev.title);
       break;
+    }
     case "tab_url":
       tabs.update(ev.id, { url: ev.url });
       break;

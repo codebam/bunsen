@@ -47,8 +47,14 @@ From a checkout, for development:
 | `BUNSEN_TRANSPORT` | `ffi` | `ffi`, `socket`, or `process-per-tab` |
 | `BUNSEN_EXTENSIONS_DIR` | `$BUNSEN_PROFILE/extensions` | Unpacked MV3 extensions |
 | `BUNSEN_BACKEND_PATH` | build output | Which backend `.so` to load |
-| `BUNSEN_HOST_PATH` | build output | Which render host binary to spawn |
-| `BUNSEN_BLITZ_HOST_PATH` | build output | The Blitz host binary |
+| `BUNSEN_HOST_PATH` | build output | WebKit host binary (used when `BUNSEN_ENGINE=webkit`) |
+| `BUNSEN_BLITZ_HOST_PATH` | build output | Blitz host binary (used when `BUNSEN_ENGINE=blitz`) |
+| `BUNSEN_DEBUG_EVENTS` | unset | `1` logs every event the shell receives |
+
+Each engine reads its own host-path override, so `BUNSEN_ENGINE` always wins.
+A single shared override used to be read by both, which meant the dev shell
+and the Nix wrapper quietly pinned the engine to WebKit while the startup
+banner still said `blitz`.
 
 ## Testing
 

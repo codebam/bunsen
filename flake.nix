@@ -25,13 +25,34 @@
         # Both backends come out of one workspace build: they share the
         # protocol crate, and building them together is what keeps them in
         # step.
+        # Only the Rust half of the tree. With `src = ./.` a one-line edit to
+        # the TypeScript shell changed the source hash and rebuilt Stylo,
+        # which is ten minutes for nothing.
+        rustSource = pkgs.lib.fileset.toSource {
+          root = ./.;
+          fileset = pkgs.lib.fileset.unions [
+            ./Cargo.toml
+            ./Cargo.lock
+            ./packages/protocol
+            ./packages/render-webkit
+            ./packages/render-blitz
+          ];
+        };
+
         renderBackends = pkgs.rustPlatform.buildRustPackage {
           pname = "bunsen-render-backends";
           version = "0.1.0";
-          src = ./.;
+          src = rustSource;
           cargoLock.lockFile = ./Cargo.lock;
 
-          nativeBuildInputs = [ pkgs.pkg-config ];
+          # Stylo generates its property tables at build time with a Mako
+          # template pass, so the sandbox needs a Python with mako on it —
+          # a dev shell inherits one from the user's environment and hides
+          # this, which is exactly how it got missed.
+          nativeBuildInputs = [
+            pkgs.pkg-config
+            (pkgs.python3.withPackages (ps: [ ps.mako ]))
+          ];
           buildInputs = nativeDeps;
 
           # buildRustPackage installs binaries but not cdylibs, and the FFI
@@ -95,7 +116,12 @@
         };
 
         devShells.default = pkgs.mkShell {
-          nativeBuildInputs = with pkgs; [ pkg-config rustc cargo rustfmt clippy bun ];
+          nativeBuildInputs = with pkgs; [
+            pkg-config rustc cargo rustfmt clippy bun
+            # Same Stylo build-time dependency as the package. Pinned here too
+            # so the dev shell does not quietly rely on the host's Python.
+            (python3.withPackages (ps: [ ps.mako ]))
+          ];
           buildInputs = nativeDeps;
 
           # WebKitGTK needs its TLS backend on the module path, or every https

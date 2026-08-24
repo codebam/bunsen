@@ -40,3 +40,25 @@ test("suggestions match url or title, most visited first", () => {
   expect(h.suggest("  ")).toEqual([]);
   h.close();
 });
+
+test("a late title corrects the row without counting another visit", () => {
+  const h = memory();
+  // What actually happens: the load finishes before the engine settles a
+  // title, so the URL stands in for one.
+  h.record("https://example.com/", "https://example.com");
+  h.retitle("https://example.com/", "Example Domain");
+  const [row] = h.recent();
+  expect(row.title).toBe("Example Domain");
+  expect(row.visits).toBe(1);
+  h.close();
+});
+
+test("retitle ignores empty titles and unknown urls", () => {
+  const h = memory();
+  h.record("https://example.com/", "Good");
+  h.retitle("https://example.com/", "");
+  h.retitle("https://never-visited.test/", "Nope");
+  expect(h.recent()).toHaveLength(1);
+  expect(h.recent()[0].title).toBe("Good");
+  h.close();
+});
