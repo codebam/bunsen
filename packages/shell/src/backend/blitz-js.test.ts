@@ -44,8 +44,9 @@ let nextTab = 1;
 /**
  * The prelude every page script gets. `ok()` records a boolean check, `val()`
  * records an observed value, and `done()` publishes the lot through the title.
- * It is a plain `var`/function preamble on purpose: each <script> is evaluated
- * separately by the worker, so nothing here may rely on cross-script scope.
+ * It stays a plain `var`/function preamble: those bind on the global object
+ * rather than in the shared global lexical scope, so a page that also declares
+ * its own top-level `const` in an earlier <script> cannot collide with it.
  */
 const PRELUDE = `
   var __r = [];
@@ -841,11 +842,244 @@ test.skipIf(headless)("console.log from a page does not break the stream", async
   expect(failures(res)).toEqual([]);
 }, 60_000);
 
+test.skipIf(headless)("classic scripts share one global lexical scope", async () => {
+  const res = await run(
+    "scope",
+    `<script>
+       const SHARED = "one";
+       let mutableTop = 1;
+       class Greeter { hi() { return "hi-" + SHARED; } }
+       function topFn() { return "fn"; }
+     </script>`,
+    `ok("constAcrossScripts", SHARED === "one", typeof SHARED);
+     ok("classAcrossScripts", new Greeter().hi() === "hi-one", new Greeter().hi());
+     ok("letAcrossScripts", mutableTop === 1, mutableTop);
+     mutableTop = 2;
+     ok("letWritable", mutableTop === 2, mutableTop);
+     ok("functionAcrossScripts", topFn() === "fn", topFn());
+
+     // A script inserted later joins the same scope, not a fresh one.
+     var s = document.createElement("script");
+     s.text = 'window.__fromDyn = Greeter.name + ":" + SHARED;';
+     document.body.appendChild(s);
+     ok("dynamicSeesScope", window.__fromDyn === "Greeter:one", window.__fromDyn);
+     done("scope");`,
+  );
+  expect(failures(res)).toEqual([]);
+}, 60_000);
+
+test.skipIf(headless)("dynamically inserted <script> elements execute", async () => {
+  pages.set("dyn.js", 'window.__ext = "ext-ran";');
+  const res = await run(
+    "dynscript",
+    "",
+    `window.__dyn = "no";
+     var s = document.createElement("script");
+     s.text = 'window.__dyn = "ran";';
+     document.body.appendChild(s);
+     ok("inlineRunsSynchronously", window.__dyn === "ran", window.__dyn);
+
+     // The "already started" flag: re-inserting the same element is inert.
+     window.__dyn = "reset";
+     document.body.appendChild(s);
+     ok("runsOnlyOnce", window.__dyn === "reset", window.__dyn);
+
+     // Fragment-parsed scripts never run, which is why innerHTML is not an
+     // arbitrary-code-execution sink.
+     window.__frag = "no";
+     var box = document.createElement("div");
+     box.innerHTML = "<" + "script>window.__frag = 'yes';<" + "/script>";
+     document.body.appendChild(box);
+     ok("innerHTMLStaysInert", window.__frag === "no", window.__frag);
+
+     // Only insertion *into the document* runs a script.
+     window.__detached = "no";
+     var off = document.createElement("script");
+     off.text = 'window.__detached = "yes";';
+     document.createElement("div").appendChild(off);
+     ok("detachedDoesNotRun", window.__detached === "no", window.__detached);
+
+     window.__json = "no";
+     var typed = document.createElement("script");
+     typed.setAttribute("type", "application/json");
+     typed.text = 'window.__json = "yes";';
+     document.body.appendChild(typed);
+     ok("nonScriptTypeIgnored", window.__json === "no", window.__json);
+
+     var ext = document.createElement("script");
+     ext.src = "/dyn.js";
+     ext.addEventListener("load", function () {
+       ok("srcFetchedAndRun", window.__ext === "ext-ran", window.__ext);
+       done("dynscript");
+     });
+     ext.addEventListener("error", function () {
+       ok("srcFetchedAndRun", false, "error-event");
+       done("dynscript");
+     });
+     document.body.appendChild(ext);`,
+  );
+  expect(failures(res)).toEqual([]);
+}, 60_000);
+
+test.skipIf(headless)("MutationObserver reports mutations", async () => {
+  const res = await run(
+    "mutation",
+    `<div id="host"></div>`,
+    `var host = document.getElementById("host");
+     var recs = [];
+     var mo = new MutationObserver(function (list) { recs = recs.concat(list); });
+     mo.observe(host, {
+       childList: true, subtree: true,
+       attributes: true, attributeOldValue: true,
+       characterData: true, characterDataOldValue: true,
+     });
+
+     var kid = document.createElement("span");
+     host.appendChild(kid);
+     host.setAttribute("data-x", "1");
+     host.setAttribute("data-x", "2");
+     var t = document.createTextNode("txt");
+     host.appendChild(t);
+     t.data = "txt2";
+     host.removeChild(kid);
+     ok("noSynchronousDelivery", recs.length === 0, recs.length);
+
+     var mo2 = new MutationObserver(function () {});
+     mo2.observe(host, { childList: true });
+     host.appendChild(document.createElement("i"));
+     var taken = mo2.takeRecords();
+     ok("takeRecords", taken.length === 1, taken.length);
+     ok("takeRecordsDrains", mo2.takeRecords().length === 0);
+     mo2.disconnect();
+
+     var filtered = [];
+     var mo3 = new MutationObserver(function (l) { filtered = filtered.concat(l); });
+     mo3.observe(host, { attributeFilter: ["data-keep"] });
+     host.setAttribute("data-keep", "y");
+     host.setAttribute("data-drop", "n");
+
+     setTimeout(function () {
+       var types = recs.map(function (r) { return r.type; }).join(",");
+       var added = recs.filter(function (r) { return r.type === "childList" && r.addedNodes.length; });
+       var gone = recs.filter(function (r) { return r.type === "childList" && r.removedNodes.length; });
+       var attrs = recs.filter(function (r) { return r.type === "attributes" && r.attributeName === "data-x"; });
+       var cds = recs.filter(function (r) { return r.type === "characterData"; });
+
+       ok("delivered", recs.length > 0, types);
+       ok("childListAdd", added.length >= 2 && added[0].addedNodes[0].tagName === "SPAN",
+          added.length + ":" + (added[0] && added[0].addedNodes[0].tagName));
+       ok("childListTarget", added[0] && added[0].target === host);
+       ok("childListRemove", gone.length === 1 && gone[0].removedNodes[0].tagName === "SPAN", gone.length);
+       ok("attributeRecords", attrs.length === 2, attrs.length);
+       ok("attributeOldValueFirst", attrs[0] && attrs[0].oldValue === null, attrs[0] && attrs[0].oldValue);
+       ok("attributeOldValueSecond", attrs[1] && attrs[1].oldValue === "1", attrs[1] && attrs[1].oldValue);
+       ok("characterData", cds.length === 1 && cds[0].oldValue === "txt",
+          cds.length + ":" + (cds[0] && cds[0].oldValue));
+       ok("attributeFilter", filtered.length === 1 && filtered[0].attributeName === "data-keep",
+          filtered.map(function (r) { return r.attributeName; }).join(","));
+
+       recs = [];
+       mo.disconnect();
+       host.setAttribute("data-after", "1");
+       setTimeout(function () {
+         ok("disconnect", recs.length === 0, recs.length);
+         done("mutation");
+       }, 30);
+     }, 30);`,
+  );
+  expect(failures(res)).toEqual([]);
+}, 60_000);
+
+test.skipIf(headless)("customElements.define upgrades elements", async () => {
+  const res = await run(
+    "custom",
+    `<x-card id="pre" label="a"></x-card><div id="host2"></div>`,
+    `var log = [];
+     class Card extends HTMLElement {
+       static get observedAttributes() { return ["label"]; }
+       constructor() { super(); log.push("ctor"); }
+       connectedCallback() { log.push("connected"); }
+       disconnectedCallback() { log.push("disconnected"); }
+       attributeChangedCallback(n, o, v) { log.push("attr:" + n + "=" + o + ">" + v); }
+     }
+     ok("undefinedBeforeDefine", customElements.get("x-card") === undefined);
+
+     customElements.define("x-card", Card);
+     ok("registryGet", customElements.get("x-card") === Card);
+     ok("upgradedExisting", log.join(",") === "ctor,attr:label=null>a,connected", log.join(","));
+
+     var pre = document.getElementById("pre");
+     ok("instanceOfDefinition", pre instanceof Card);
+
+     log = [];
+     pre.setAttribute("label", "b");
+     ok("attributeChangedCallback", log.join(",") === "attr:label=a>b", log.join(","));
+
+     log = [];
+     pre.setAttribute("other", "z");
+     ok("unobservedAttributeIgnored", log.length === 0, log.join(","));
+
+     log = [];
+     var made = document.createElement("x-card");
+     ok("createElementUpgrades", made instanceof Card && log.join(",") === "ctor", log.join(","));
+
+     log = [];
+     document.getElementById("host2").appendChild(made);
+     ok("connectedOnInsert", log.join(",") === "connected", log.join(","));
+
+     log = [];
+     made.remove();
+     ok("disconnectedOnRemove", log.join(",") === "disconnected", log.join(","));
+
+     ok("directConstruction", new Card() instanceof Card);
+
+     var settled = "pending";
+     customElements.whenDefined("x-later").then(function (c) { settled = typeof c; });
+     setTimeout(function () {
+       customElements.define("x-later", class extends HTMLElement {});
+       setTimeout(function () {
+         ok("whenDefinedSettles", settled === "function", settled);
+         var already = "no";
+         customElements.whenDefined("x-card").then(function () { already = "yes"; });
+         setTimeout(function () {
+           ok("whenDefinedAlreadyDefined", already === "yes", already);
+           done("custom");
+         }, 20);
+       }, 20);
+     }, 0);`,
+  );
+  expect(failures(res)).toEqual([]);
+}, 60_000);
+
+test.skipIf(headless)("document.cookie round-trips in the per-document jar", async () => {
+  const res = await run(
+    "cookie",
+    "",
+    `function jar() { return document.cookie.replace(/;\\s*/g, "|"); }
+     ok("startsEmpty", document.cookie === "", jar());
+     document.cookie = "a=1";
+     ok("setAndGet", document.cookie === "a=1", jar());
+     document.cookie = "b=2; path=/";
+     ok("second", jar() === "a=1|b=2", jar());
+     document.cookie = "a=9";
+     ok("overwrite", jar() === "a=9|b=2", jar());
+     document.cookie = "b=2; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+     ok("expiredIsDeleted", jar() === "a=9", jar());
+     document.cookie = "c=3; max-age=0";
+     ok("maxAgeZeroDeletes", jar() === "a=9", jar());
+     document.cookie = "d=4; max-age=600";
+     ok("maxAgeFutureKept", jar() === "a=9|d=4", jar());
+     document.cookie = "e=5; path=/nowhere/deep";
+     ok("pathScoped", jar() === "a=9|d=4", jar());
+     document.cookie = "novalue";
+     ok("bareTokenIgnored", jar() === "a=9|d=4", jar());
+     ok("cookieEnabled", navigator.cookieEnabled === true);
+     done("cookie");`,
+  );
+  expect(failures(res)).toEqual([]);
+}, 60_000);
+
 // Not implemented by js/engine.ts. Each names the missing API rather than
 // pretending the behaviour exists.
-test.todo("MutationObserver reports mutations (engine ships an inert stub)");
-test.todo("customElements.define upgrades elements (define() is a no-op)");
-test.todo("document.cookie round-trips (getter returns '', setter discards)");
 test.todo("Element.attachShadow / ShadowRoot (ShadowRoot is an empty class)");
 test.todo("getComputedStyle resolves cascaded values, not just inline style");
-test.todo("dynamically inserted <script> elements execute");

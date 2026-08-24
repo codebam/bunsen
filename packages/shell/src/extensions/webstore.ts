@@ -25,11 +25,14 @@ import { extractZipTo, parseCrx } from "./crx";
 import { parseManifest } from "./manifest";
 
 /**
- * Version claimed to the update service. It refuses very old clients and can
- * serve different packages per version, so this needs to stay plausible and
- * be bumped occasionally.
+ * Version claimed to the update service.
+ *
+ * This is not cosmetic. The service answers a version it considers too old
+ * with `204 No Content` and an empty body rather than an error, so a stale
+ * value here looks exactly like a corrupt download. Verified against the live
+ * endpoint: 120 returns 204, 131 and above return the package.
  */
-export const PRODVERSION = "120.0.0.0";
+export const PRODVERSION = "131.0.0.0";
 
 /** Store ids are 32 characters drawn from 'a'..'p'. */
 const ID_RE = /^[a-p]{32}$/;
@@ -94,6 +97,15 @@ export async function install(idOrUrl: string, intoDir: string): Promise<Install
     throw new Error(`downloading ${id} failed: HTTP ${response.status} ${response.statusText}`);
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
+  // 204, or any empty 2xx, is how the service declines: no such extension, or
+  // a prodversion it will not serve. Saying so beats letting the CRX parser
+  // report "not a CRX file: 0 bytes" for what is really a refusal.
+  if (bytes.length === 0) {
+    throw new Error(
+      `the store returned no package for ${id} (HTTP ${response.status}); ` +
+        `it may not exist, or PRODVERSION ${PRODVERSION} may no longer be accepted`,
+    );
+  }
   return installFromCrx(bytes, id, intoDir);
 }
 

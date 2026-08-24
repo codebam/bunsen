@@ -17,6 +17,7 @@ import { ExtensionHost } from "./extensions/registry";
 import { extensionIdFromUrl, install as installFromStore } from "./extensions/webstore";
 import { Bookmarks } from "./bookmarks";
 import { History } from "./history";
+import { Session } from "./session";
 import { resolve as resolveOmnibox } from "./omnibox";
 import { TabStore } from "./tabs";
 
@@ -61,6 +62,7 @@ const EXTENSIONS_DIR = Bun.env.BUNSEN_EXTENSIONS_DIR ?? join(PROFILE, "extension
 // the default XDG path regardless of BUNSEN_PROFILE.
 const history = new History(join(PROFILE, "history.db"));
 const bookmarks = new Bookmarks(join(PROFILE, "bookmarks.db"));
+const session = new Session(join(PROFILE, "session.json"));
 const tabs = new TabStore();
 const chromeSockets = new Set<ServerWebSocket<unknown>>();
 
@@ -136,7 +138,23 @@ for (const extension of extensionHost.extensions) {
 }
 syncContentScripts();
 
-openTab(HOME);
+// A restored session beats the home page; an empty or corrupt one falls back
+// to it, which is the whole reason restore() never throws.
+const restored = session.restore();
+if (restored.length > 0) {
+  for (const tab of restored) openTab(tab.url);
+  const active = restored.findIndex((t) => t.active);
+  if (active > 0) {
+    const id = tabs.list()[active]?.id;
+    if (id !== undefined) {
+      tabs.activate(id);
+      backend.send({ op: "tab_activate", id });
+    }
+  }
+} else {
+  openTab(HOME);
+}
+
 console.log(
   `bunsen: chrome on ${chromeUrl}, engine ${ENGINE}, transport ${TRANSPORT}, profile ${PROFILE}`,
 );
@@ -187,7 +205,19 @@ function handleChrome(ws: ServerWebSocket<unknown>, msg: any): void {
   }
 }
 
+/** Persist the tab set so a restart comes back to it. Debounced internally. */
+function saveSession(): void {
+  session.save(
+    tabs.list().map((tab) => ({
+      url: tab.url,
+      title: tab.title,
+      active: tabs.activeId === tab.id,
+    })),
+  );
+}
+
 function pushState(): void {
+  saveSession();
   const payload = JSON.stringify({
     t: "state",
     tabs: tabs.list(),
@@ -440,6 +470,8 @@ function shutdown(): void {
   shuttingDown = true;
 
   extensionHost.stop();
+  // The debounce timer is unref'd, so without this the last change is lost.
+  session.flush();
   bookmarks.close();
   backend.flush();
   backend.stop();

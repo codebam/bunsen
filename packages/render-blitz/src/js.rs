@@ -154,6 +154,13 @@ impl Engine {
     /// Spawn a bun worker for `html` at `url`. The returned engine already
     /// has the load message queued; results arrive on `out`.
     #[allow(clippy::too_many_arguments)]
+    /// `wake` is called after every message this engine produces.
+    ///
+    /// The channel alone is not enough: the renderer only drains it from the
+    /// windowing thread's pump, and that pump runs when the event loop wakes.
+    /// Without a nudge, a page's output sits unread until some unrelated
+    /// event arrives — which looks exactly like a scripted page that has
+    /// frozen until you move the mouse.
     pub fn spawn(
         bun: &Path,
         worker: &Path,
@@ -162,6 +169,7 @@ impl Engine {
         url: &str,
         html: &str,
         out: Sender<JsEnvelope>,
+        wake: Box<dyn Fn() + Send + 'static>,
     ) -> std::io::Result<Engine> {
         use std::sync::mpsc::channel;
 
@@ -214,6 +222,7 @@ impl Engine {
                             {
                                 break;
                             }
+                            wake();
                         }
                         Err(e) => eprintln!("bunsen-js: undecodable line ({e}): {:.200}", l),
                     }

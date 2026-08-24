@@ -212,7 +212,7 @@ pub fn render(c: &Chrome) -> String {
     }
 
     format!(
-        "<div id=\"bns-chrome\" style=\"position:fixed;top:0;left:0;width:100%;height:{h:.0}px;background:#17191d;color:#dde3ec;font-family:sans-serif;z-index:2147483647\">\
+        "<div id=\"bns-chrome\" style=\"position:fixed;top:0;left:0;right:0;height:{h:.0}px;background:#17191d;color:#dde3ec;font-family:sans-serif;z-index:2147483647\">\
 <div style=\"display:flex;align-items:center;height:{ROW1:.0}px;padding:0 {OMNI_PAD}px;gap:{GAP}px\">\
 <span style=\"width:{BTN_W}px;text-align:center;color:{}\">‹</span>\
 <span style=\"width:{BTN_W}px;text-align:center;color:{}\">›</span>\

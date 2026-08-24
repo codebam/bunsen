@@ -1316,11 +1316,6 @@ function toNodes(x: any, parent: Node): Node[] {
   return [t];
 }
 
-function invalidateTree(nd: Node): void {
-  delete nd._el;
-  for (const c of nd.children) invalidateTree(c);
-}
-
 // ------------------------------------------------- mutation / lifecycle hooks
 
 /**
@@ -2713,12 +2708,17 @@ void (async () => {
       }
     }
   }
-  // EOF on stdin means the renderer died without killing us. Timers must
-  // keep working until then — pages live by them — so do NOT exit here.
-  // A generous watchdog keeps crashed-parent orphans from piling up.
-  setInterval(() => {
-    if (Date.now() - lastLineSeen > 30 * 60_000) process.exit(0);
-  }, 60_000);
+  // EOF on stdin means the renderer is gone. Nothing can consume what this
+  // process produces any more, so staying alive only leaks: a killed test run
+  // used to leave engines resident for half an hour, and enough of them piled
+  // up to make page loads miss their deadlines.
+  //
+  // A short grace period lets an in-flight microtask finish and its output
+  // drain before exit; there is no reason to wait longer than that, because
+  // nobody is listening.
+  const grace = setTimeout(() => process.exit(0), 2_000);
+  // Do not hold the loop open on account of the timer itself.
+  grace.unref?.();
 })().catch((e) => report("stdin-loop", e));
 
 function handleMessage(msg: any): void {

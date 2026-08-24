@@ -364,6 +364,17 @@ impl BunsenApp {
                 self.step_active(1);
                 true
             }
+            Key::Named(NamedKey::PageDown) => self.scroll_page(1.0),
+            Key::Named(NamedKey::PageUp) => self.scroll_page(-1.0),
+            Key::Named(NamedKey::Home) if !self.chrome.focused => self.scroll_to_top(),
+            Key::Named(NamedKey::End) if !self.chrome.focused => self.scroll_page(1e6),
+            Key::Named(NamedKey::ArrowDown) if !self.chrome.focused => self.scroll_by(60.0),
+            Key::Named(NamedKey::ArrowUp) if !self.chrome.focused => self.scroll_by(-60.0),
+            // Space is a character key, not a named one, and only scrolls
+            // when the page rather than the omnibox has the keyboard.
+            Key::Character(c) if c.as_str() == " " && !ctrl && !self.chrome.focused => {
+                self.scroll_page(1.0)
+            }
             Key::Character(c) if ctrl => match c.as_str() {
                 "l" => {
                     // Focus the address bar and select what is there, which is
@@ -398,6 +409,46 @@ impl BunsenApp {
             },
             _ => false,
         }
+    }
+
+    /// Scroll the active document by a fraction of the viewport.
+    ///
+    /// The chrome bar is `position: fixed`, so it stays put while this moves
+    /// the page underneath it.
+    fn scroll_page(&mut self, pages: f64) -> bool {
+        let height = self
+            .view()
+            .map(|v| v.doc.inner().viewport().window_size.1 as f64)
+            .unwrap_or(600.0);
+        // Overlap by a line or so, the way every reader does, so nothing is
+        // skipped between one press and the next.
+        self.scroll_by((height - self.chrome.height - 40.0).max(80.0) * pages)
+    }
+
+    fn scroll_by(&mut self, delta: f64) -> bool {
+        let chrome_height = self.chrome.height;
+        let Some(view) = self.view() else { return true };
+        let mut inner = view.doc.inner_mut();
+        let current = inner.viewport_scroll();
+        let max = (inner.root_node().final_layout.size.height as f64
+            - inner.viewport().window_size.1 as f64
+            + chrome_height)
+            .max(0.0);
+        let y = (current.y + delta).clamp(0.0, max);
+        inner.set_viewport_scroll(blitz_dom::Point { x: current.x, y });
+        drop(inner);
+        view.request_redraw();
+        true
+    }
+
+    fn scroll_to_top(&mut self) -> bool {
+        let Some(view) = self.view() else { return true };
+        let mut inner = view.doc.inner_mut();
+        let x = inner.viewport_scroll().x;
+        inner.set_viewport_scroll(blitz_dom::Point { x, y: 0.0 });
+        drop(inner);
+        view.request_redraw();
+        true
     }
 
     fn reload_active(&mut self) {
@@ -723,6 +774,7 @@ impl BunsenApp {
             return;
         };
         let tx = self.js_tx.clone();
+        let proxy = self.proxy.clone();
         match js::Engine::spawn(
             &bun,
             &worker,
@@ -731,6 +783,7 @@ impl BunsenApp {
             &url,
             &html,
             tx,
+            Box::new(move || proxy.wake_up()),
         ) {
             Ok(engine) => {
                 self.engines.insert(tab, engine);

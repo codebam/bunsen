@@ -178,3 +178,46 @@ test("a broken manifest is reported, not thrown", () => {
   expect(report.failures[0].errors[0]).toContain("manifest_version");
   host.stop();
 });
+
+test("__MSG_ placeholders in the name are resolved from _locales", () => {
+  // Store extensions routinely ship `"name": "__MSG_extName__"`; left alone
+  // that is what the tab strip would display. uBlock Origin Lite is a real
+  // example, which is how this was found.
+  const root = extensionDir({
+    manifest_version: 3,
+    name: "__MSG_extName__",
+    description: "__MSG_extDesc__",
+    version: "1.0",
+    default_locale: "en",
+  });
+  const locales = join(root, "sample", "_locales", "en");
+  mkdirSync(locales, { recursive: true });
+  writeFileSync(
+    join(locales, "messages.json"),
+    JSON.stringify({
+      extName: { message: "Resolved Name" },
+      extDesc: { message: "Resolved description" },
+    }),
+  );
+
+  const { shell } = bridge();
+  const host = new ExtensionHost(":memory:", shell);
+  const [extension] = host.loadAll(root).loaded;
+  expect(extension.manifest.name).toBe("Resolved Name");
+  expect(extension.manifest.description).toBe("Resolved description");
+  host.stop();
+});
+
+test("a missing locale file leaves the placeholder rather than throwing", () => {
+  const root = extensionDir({
+    manifest_version: 3,
+    name: "__MSG_extName__",
+    version: "1.0",
+    default_locale: "en",
+  });
+  const { shell } = bridge();
+  const host = new ExtensionHost(":memory:", shell);
+  const [extension] = host.loadAll(root).loaded;
+  expect(extension.manifest.name).toBe("__MSG_extName__");
+  host.stop();
+});

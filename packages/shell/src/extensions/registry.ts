@@ -11,7 +11,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { ExtensionApi, PermissionError, type Extension, type ShellBridge } from "./api";
-import { parseManifest } from "./manifest";
+import { parseManifest, type Manifest } from "./manifest";
 import { ExtensionStorage } from "./storage";
 
 const BOOTSTRAP = join(import.meta.dir, "worker-bootstrap.ts");
@@ -145,6 +145,8 @@ export class ExtensionHost {
     const { manifest, errors, warnings } = parseManifest(raw, fallbackId);
     if (!manifest) return { extension: null, errors, warnings };
 
+    localize(manifest, root, (raw as Record<string, unknown>).default_locale);
+
     const extension: Extension = { id: manifest.id, manifest, root };
     this.#extensions.set(extension.id, extension);
     return { extension, errors, warnings };
@@ -204,6 +206,61 @@ export class ExtensionHost {
     for (const worker of this.#workers.values()) worker.terminate();
     this.#workers.clear();
     this.#storage.close();
+  }
+}
+
+/**
+ * Replace `__MSG_name__` placeholders in the user-visible fields.
+ *
+ * Store extensions routinely ship a manifest whose name is
+ * `__MSG_extName__`, to be resolved from `_locales/<locale>/messages.json`.
+ * Left alone it is what the tab strip and the extension list would show, so
+ * this is cosmetic only in the sense that every visible name depends on it.
+ *
+ * Falls back through the manifest's declared default locale, then English,
+ * then any locale present — a name in the wrong language beats a placeholder.
+ */
+function localize(manifest: Manifest, root: string, defaultLocale: unknown): void {
+  const placeholder = /^__MSG_(\w+)__$/;
+  const needed = [manifest.name, manifest.description].some((v) => placeholder.test(v));
+  if (!needed) return;
+
+  const candidates = [
+    typeof defaultLocale === "string" ? defaultLocale : null,
+    "en",
+    "en_US",
+  ].filter((l): l is string => l !== null);
+
+  const localesDir = join(root, "_locales");
+  if (existsSync(localesDir)) {
+    try {
+      for (const entry of readdirSync(localesDir, { withFileTypes: true })) {
+        if (entry.isDirectory() && !candidates.includes(entry.name)) candidates.push(entry.name);
+      }
+    } catch {
+      // An unreadable _locales just means we keep the placeholders.
+    }
+  }
+
+  for (const locale of candidates) {
+    const file = join(localesDir, locale, "messages.json");
+    if (!existsSync(file)) continue;
+    let messages: Record<string, { message?: string }>;
+    try {
+      messages = JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      continue;
+    }
+    const resolve = (value: string): string => {
+      const match = placeholder.exec(value);
+      if (!match) return value;
+      // Message keys are case-insensitive in Chrome.
+      const key = Object.keys(messages).find((k) => k.toLowerCase() === match[1].toLowerCase());
+      return key ? messages[key].message ?? value : value;
+    };
+    manifest.name = resolve(manifest.name);
+    manifest.description = resolve(manifest.description);
+    if (!placeholder.test(manifest.name)) return;
   }
 }
 
