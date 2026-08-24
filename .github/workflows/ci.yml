@@ -19,6 +19,9 @@ jobs:
       - name: Rust formatting
         run: nix develop --command cargo fmt --manifest-path packages/render-webkit/Cargo.toml -- --check
 
+      - name: Codec tests
+        run: nix develop --command cargo test --manifest-path packages/render-webkit/Cargo.toml
+
       - name: Clippy
         run: nix develop --command cargo clippy --manifest-path packages/render-webkit/Cargo.toml -- -D warnings
 

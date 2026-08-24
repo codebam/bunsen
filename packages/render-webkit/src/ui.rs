@@ -13,10 +13,13 @@ use gtk::gdk::prelude::TextureExt;
 use gtk::prelude::*;
 use webkit6::prelude::*;
 
+use crate::codec::decode_commands;
 use crate::eventq::EventQueue;
 use crate::protocol::{Command, Config, Event, TabId};
 
 struct Ui {
+    session: webkit6::NetworkSession,
+    settings: webkit6::Settings,
     stack: gtk::Stack,
     chrome: webkit6::WebView,
     window: gtk::ApplicationWindow,
@@ -47,14 +50,14 @@ pub fn run(cfg: Config, commands: async_channel::Receiver<Vec<u8>>, events: Arc<
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-    // Favicons are off by default; the database is per network session.
-    if let Some(session) = webkit6::NetworkSession::default() {
-        if let Some(data) = session.website_data_manager() {
-            data.set_favicons_enabled(true);
-        }
-    }
+    let session = content_session(&cfg);
+    let settings = content_settings(&cfg);
 
-    let chrome = webkit6::WebView::new();
+    // The chrome UI is local and must never share cookies or storage with the
+    // pages it is displaying.
+    let chrome = webkit6::WebView::builder()
+        .network_session(&webkit6::NetworkSession::new_ephemeral())
+        .build();
     chrome.set_size_request(-1, cfg.chrome_height);
     chrome.set_vexpand(false);
     chrome.load_uri(&cfg.chrome_url);
@@ -67,6 +70,8 @@ pub fn run(cfg: Config, commands: async_channel::Receiver<Vec<u8>>, events: Arc<
     window.set_child(Some(&root));
 
     let ui = Rc::new(RefCell::new(Ui {
+        session,
+        settings,
         stack,
         chrome,
         window: window.clone(),
@@ -92,10 +97,10 @@ pub fn run(cfg: Config, commands: async_channel::Receiver<Vec<u8>>, events: Arc<
         let main_loop = main_loop.clone();
         glib::MainContext::default().spawn_local(async move {
             while let Ok(batch) = commands.recv().await {
-                let cmds: Vec<Command> = match serde_json::from_slice(&batch) {
+                let cmds = match decode_commands(&batch) {
                     Ok(c) => c,
                     Err(e) => {
-                        eprintln!("bunsen: bad command batch: {e}");
+                        eprintln!("bunsen: {e}");
                         continue;
                     }
                 };
@@ -119,7 +124,13 @@ pub fn run(cfg: Config, commands: async_channel::Receiver<Vec<u8>>, events: Arc<
 fn apply(ui: &Rc<RefCell<Ui>>, cmd: Command) {
     match cmd {
         Command::TabCreate { id, url } => {
-            let view = webkit6::WebView::new();
+            let view = {
+                let u = ui.borrow();
+                webkit6::WebView::builder()
+                    .network_session(&u.session)
+                    .settings(&u.settings)
+                    .build()
+            };
             wire_signals(ui, id, &view);
             {
                 let mut u = ui.borrow_mut();
@@ -250,6 +261,41 @@ fn wire_signals(ui: &Rc<RefCell<Ui>>, id: TabId, view: &webkit6::WebView) {
         // false: let WebKit render its own error page.
         false
     });
+}
+
+/// Settings shared by every content view.
+fn content_settings(cfg: &Config) -> webkit6::Settings {
+    let settings = webkit6::Settings::new();
+    // WebKit's default is already to block gesture-less window.open; state it
+    // explicitly so the popup policy is visible in one place.
+    settings.set_javascript_can_open_windows_automatically(cfg.allow_popups);
+    settings
+}
+
+/// Build the session every content view shares: one cookie jar, one cache,
+/// one favicon database. With no data directory it is ephemeral, which is
+/// what private browsing will be built on.
+fn content_session(cfg: &Config) -> webkit6::NetworkSession {
+    let Some(data_dir) = cfg.data_dir.as_deref() else {
+        return webkit6::NetworkSession::new_ephemeral();
+    };
+    let cache_dir = cfg.cache_dir.as_deref().unwrap_or(data_dir);
+    let session = webkit6::NetworkSession::new(Some(data_dir), Some(cache_dir));
+
+    if let Some(data) = session.website_data_manager() {
+        // Favicons are off by default, and the database is per session.
+        data.set_favicons_enabled(true);
+    }
+    if let Some(cookies) = session.cookie_manager() {
+        cookies.set_persistent_storage(
+            &format!("{data_dir}/cookies.sqlite"),
+            webkit6::CookiePersistentStorage::Sqlite,
+        );
+        // Third-party cookies are off. Sites that need them will have to ask
+        // once we have a permission surface to ask through.
+        cookies.set_accept_policy(webkit6::CookieAcceptPolicy::NoThirdParty);
+    }
+    session
 }
 
 /// WebKit hands us a GdkTexture; the chrome UI wants something it can put in

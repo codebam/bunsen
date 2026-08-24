@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/codebam/bunsen"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 gtk = { package = "gtk4", version = "0.9", features = ["v4_10"] }
@@ -20,3 +20,7 @@ libc = "0.2"
 
 [profile.release]
 lto = true
+
+[[bin]]
+name = "bunsen-render-host"
+path = "src/bin/host.rs"

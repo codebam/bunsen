@@ -10,6 +10,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::codec::encode_events;
 use crate::protocol::Event;
 
 pub struct EventQueue {
@@ -71,6 +72,19 @@ impl EventQueue {
         self.signal();
     }
 
+    /// Serialize pending events into a fresh buffer, or None when idle.
+    /// Used by the out-of-process host, which owns its own framing and has no
+    /// caller-supplied buffer to fill.
+    pub fn drain(&self) -> Option<Vec<u8>> {
+        let mut pending = self.pending.lock().unwrap();
+        if pending.is_empty() {
+            return None;
+        }
+        let bytes = encode_events(&pending);
+        pending.clear();
+        Some(bytes)
+    }
+
     /// Serialize pending events into `out`. Returns bytes written, or None if
     /// `out` is too small — in which case nothing is consumed.
     pub fn drain_into(&self, out: &mut [u8]) -> Option<usize> {
@@ -78,7 +92,7 @@ impl EventQueue {
         if pending.is_empty() {
             return Some(0);
         }
-        let bytes = serde_json::to_vec(&*pending).unwrap_or_else(|_| b"[]".to_vec());
+        let bytes = encode_events(&pending);
         if bytes.len() > out.len() {
             return None;
         }

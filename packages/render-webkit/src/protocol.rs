@@ -2,9 +2,11 @@
 //! Wire types for the backend ABI.
 //!
 //! Deliberately free of anything WebKit-specific: the Blitz backend will
-//! reuse this module verbatim.
+//! reuse this module verbatim. Their encoding lives in [`crate::codec`];
+//! only `Config` is JSON, because it crosses once at startup and readability
+//! is worth more there than bytes.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 pub type TabId = u32;
 
@@ -17,6 +19,16 @@ pub struct Config {
     pub height: i32,
     #[serde(default = "default_chrome_height")]
     pub chrome_height: i32,
+    /// Profile directory. Cookies, local storage and the favicon database
+    /// live here; omit it for a session that forgets everything on exit.
+    #[serde(default)]
+    pub data_dir: Option<String>,
+    #[serde(default)]
+    pub cache_dir: Option<String>,
+    /// Let scripts open windows without a user gesture. Off by default —
+    /// that default *is* the popup blocker.
+    #[serde(default)]
+    pub allow_popups: bool,
 }
 
 fn default_width() -> i32 {
@@ -29,45 +41,21 @@ fn default_chrome_height() -> i32 {
     76
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case")]
+#[derive(Debug, PartialEq)]
 pub enum Command {
-    TabCreate {
-        id: TabId,
-        url: String,
-    },
-    TabClose {
-        id: TabId,
-    },
-    TabActivate {
-        id: TabId,
-    },
-    TabNavigate {
-        id: TabId,
-        url: String,
-    },
-    TabBack {
-        id: TabId,
-    },
-    TabForward {
-        id: TabId,
-    },
-    TabReload {
-        id: TabId,
-        #[serde(default)]
-        bypass_cache: bool,
-    },
-    TabStop {
-        id: TabId,
-    },
-    ChromeHeight {
-        px: i32,
-    },
+    TabCreate { id: TabId, url: String },
+    TabClose { id: TabId },
+    TabActivate { id: TabId },
+    TabNavigate { id: TabId, url: String },
+    TabBack { id: TabId },
+    TabForward { id: TabId },
+    TabReload { id: TabId, bypass_cache: bool },
+    TabStop { id: TabId },
+    ChromeHeight { px: i32 },
     AppQuit,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(tag = "ev", rename_all = "snake_case")]
+#[derive(Debug, PartialEq)]
 pub enum Event {
     Ready,
     TabTitle {

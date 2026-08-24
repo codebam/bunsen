@@ -14,8 +14,9 @@
  *      FFI today can travel over a socket to a sandboxed content process
  *      tomorrow without touching the shell.
  *
- * The buffer encoding is JSON while the protocol is still moving. Swapping it
- * for a binary format is a change to the codec on both sides, not to this ABI.
+ * The buffer encoding is a compact little-endian binary format; see
+ * src/codec.rs for the layout and the opcode table. Only the startup config
+ * is JSON, since it crosses once and readability is worth more than bytes.
  *
  * Threading: bunsen_backend_start spawns the UI thread and returns. Every
  * other function is safe to call from any single thread (the Bun main thread).
@@ -41,18 +42,20 @@ typedef struct BunsenBackend BunsenBackend;
 /*
  * Start the backend. `config_json` is a NUL-terminated UTF-8 JSON object:
  *   { "chrome_url": string, "width": u32, "height": u32, "chrome_height": u32 }
- * Returns NULL on failure.
+ * Returns NULL on failure — including the second call in a process, since
+ * the windowing toolkit can only be initialised once. A shell that needs to
+ * restart its renderer must use the out-of-process host.
  */
 BunsenBackend *bunsen_backend_start(const char *config_json);
 
 /*
- * Submit a batch of commands: a JSON array of objects, each `{ "op": ... }`.
- * The bytes are copied before returning; the caller may reuse the buffer.
+ * Submit a batch of commands in the binary batch format. The bytes are copied
+ * before returning; the caller may reuse the buffer.
  */
 int32_t bunsen_backend_submit(BunsenBackend *b, const uint8_t *buf, size_t len);
 
 /*
- * Drain pending events into `out`. Writes a JSON array of event objects.
+ * Drain pending events into `out` in the binary batch format.
  * Returns bytes written (0 when idle), or BUNSEN_ERR_NOSPACE.
  * Draining is all-or-nothing: on NOSPACE no events are consumed.
  */

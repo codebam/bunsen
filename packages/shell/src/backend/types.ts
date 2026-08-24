@@ -38,6 +38,11 @@ export interface BackendConfig {
   width?: number;
   height?: number;
   chrome_height?: number;
+  /** Profile directory. Omit for a session that forgets everything on exit. */
+  data_dir?: string;
+  cache_dir?: string;
+  /** Let scripts open windows without a user gesture. Off is the popup blocker. */
+  allow_popups?: boolean;
 }
 
 export interface RenderBackend {

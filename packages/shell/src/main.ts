@@ -10,19 +10,27 @@
 import { join } from "node:path";
 import type { ServerWebSocket } from "bun";
 
-import { FfiBackend } from "./backend/ffi";
-import type { BackendEvent, RenderBackend } from "./backend/types";
+import { createBackend, type TransportKind } from "./backend/client";
+import type { BackendEvent } from "./backend/types";
 import { History } from "./history";
 import { resolve as resolveOmnibox } from "./omnibox";
 import { TabStore } from "./tabs";
 
 const CHROME_HEIGHT = 76;
 const HOME = Bun.env.BUNSEN_HOME_PAGE ?? "https://duckduckgo.com";
+const BUILD = join(import.meta.dir, "../../render-webkit/target/debug");
 const BACKEND_PATH =
-  Bun.env.BUNSEN_BACKEND_PATH ??
+  Bun.env.BUNSEN_BACKEND_PATH ?? join(BUILD, "libbunsen_render_webkit.so");
+const HOST_PATH = Bun.env.BUNSEN_HOST_PATH ?? join(BUILD, "bunsen-render-host");
+// FFI by default: one less context switch per batch. Socket puts the renderer
+// in its own process, so a renderer crash costs the window, not the browser.
+const TRANSPORT = (Bun.env.BUNSEN_TRANSPORT ?? "ffi") as TransportKind;
+const PROFILE =
+  Bun.env.BUNSEN_PROFILE ??
   join(
-    import.meta.dir,
-    "../../render-webkit/target/debug/libbunsen_render_webkit.so",
+    Bun.env.XDG_DATA_HOME ?? join(Bun.env.HOME ?? ".", ".local", "share"),
+    "bunsen",
+    "profile",
   );
 
 const history = new History();
@@ -69,7 +77,10 @@ const server = Bun.serve({
 });
 
 const chromeUrl = `http://127.0.0.1:${server.port}/`;
-const backend: RenderBackend = new FfiBackend(BACKEND_PATH);
+const backend = createBackend(TRANSPORT, {
+  library: BACKEND_PATH,
+  host: HOST_PATH,
+});
 
 backend.onEvent(onBackendEvent);
 await backend.start({
@@ -77,10 +88,15 @@ await backend.start({
   width: 1280,
   height: 860,
   chrome_height: CHROME_HEIGHT,
+  // Cookies, local storage and the favicon database live here.
+  data_dir: PROFILE,
+  cache_dir: join(PROFILE, "cache"),
 });
 
 openTab(HOME);
-console.log(`bunsen: chrome on ${chromeUrl}, backend ${BACKEND_PATH}`);
+console.log(
+  `bunsen: chrome on ${chromeUrl}, transport ${TRANSPORT}, profile ${PROFILE}`,
+);
 
 // ---------------------------------------------------------------- chrome UI
 

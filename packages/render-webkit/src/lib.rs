@@ -5,12 +5,14 @@
 //! The exported surface is five functions. Everything else the shell wants to
 //! say goes inside a command batch, so adding features never widens the ABI.
 
-mod eventq;
-mod protocol;
-mod ui;
+pub mod codec;
+pub mod eventq;
+pub mod protocol;
+pub mod ui;
 
 use std::ffi::CStr;
 use std::os::raw::c_char;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -25,6 +27,13 @@ use protocol::Config;
 pub const BUNSEN_OK: i32 = 0;
 pub const BUNSEN_ERR: i32 = -1;
 pub const BUNSEN_ERR_NOSPACE: i32 = -2;
+
+/// GTK may be initialised exactly once, from exactly one thread, per process.
+/// A second in-process backend would panic inside gtk-rs, so refuse it here
+/// with a return code the caller can act on. This is the sharpest reason to
+/// prefer the out-of-process host: it gets a fresh process every time, and so
+/// can be restarted after a crash.
+static GTK_CLAIMED: AtomicBool = AtomicBool::new(false);
 
 pub struct BunsenBackend {
     commands: async_channel::Sender<Vec<u8>>,
@@ -46,6 +55,14 @@ pub unsafe extern "C" fn bunsen_backend_start(config_json: *const c_char) -> *mu
         Some(c) => c,
         None => return std::ptr::null_mut(),
     };
+
+    if GTK_CLAIMED.swap(true, Ordering::SeqCst) {
+        eprintln!(
+            "bunsen: a render backend already ran in this process; \
+             use the out-of-process host instead"
+        );
+        return std::ptr::null_mut();
+    }
 
     let (tx, rx) = async_channel::unbounded::<Vec<u8>>();
     let events = EventQueue::new();
@@ -167,9 +184,10 @@ pub unsafe extern "C" fn bunsen_backend_stop(b: *mut BunsenBackend) {
         return;
     }
     let mut backend = unsafe { Box::from_raw(b) };
-    let _ = backend
-        .commands
-        .send_blocking(br#"[{"op":"app_quit"}]"#.to_vec());
+    // One AppQuit, hand-encoded: count=1, opcode, no fields.
+    let mut quit = 1u32.to_le_bytes().to_vec();
+    quit.extend_from_slice(&codec::op::APP_QUIT.to_le_bytes());
+    let _ = backend.commands.send_blocking(quit);
     backend.commands.close();
     if let Some(t) = backend.thread.take() {
         let _ = t.join();
