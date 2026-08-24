@@ -525,6 +525,7 @@ dependencies = [
  "blitz-shell",
  "blitz-traits",
  "bunsen-protocol",
+ "libc",
  "serde",
  "serde_json",
  "tokio",

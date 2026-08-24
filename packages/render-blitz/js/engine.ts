@@ -2808,17 +2808,36 @@ void (async () => {
     }
   }
   // EOF on stdin means the renderer is gone. Nothing can consume what this
-  // process produces any more, so staying alive only leaks: a killed test run
-  // used to leave engines resident for half an hour, and enough of them piled
-  // up to make page loads miss their deadlines.
+  // process produces any more, so staying alive only leaks.
   //
   // A short grace period lets an in-flight microtask finish and its output
-  // drain before exit; there is no reason to wait longer than that, because
-  // nobody is listening.
+  // drain before exit; there is no reason to wait longer, because nobody is
+  // listening.
   const grace = setTimeout(() => process.exit(0), 2_000);
   // Do not hold the loop open on account of the timer itself.
   grace.unref?.();
 })().catch((e) => report("stdin-loop", e));
+
+/**
+ * Exit when the renderer dies, however it dies.
+ *
+ * EOF on stdin covers a clean teardown, but not a SIGKILL: the read can sit
+ * there forever while this process keeps running a page's timers. A busy page
+ * — YouTube, say — then spins a core indefinitely, and several such orphans
+ * were found at 100% CPU each, long after every parent had gone.
+ *
+ * Reparenting is the reliable signal on POSIX: when the parent dies this
+ * process is adopted, and getppid changes. Polling it costs nothing and does
+ * not depend on the pipe ever reporting anything.
+ */
+function watchForOrphaning(): void {
+  const parentAtStart = process.ppid;
+  const check = setInterval(() => {
+    if (process.ppid !== parentAtStart) process.exit(0);
+  }, 2_000);
+  check.unref?.();
+}
+watchForOrphaning();
 
 function handleMessage(msg: any): void {
   switch (msg.op) {

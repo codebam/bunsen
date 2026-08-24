@@ -178,13 +178,41 @@ impl Engine {
     ) -> std::io::Result<Engine> {
         use std::sync::mpsc::channel;
 
-        let mut child = Command::new(bun)
+        let mut command = Command::new(bun);
+        command
             .arg("run")
             .arg(worker)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()?;
+            .stderr(Stdio::inherit());
+
+        // Tie the engine's life to ours at the kernel level.
+        //
+        // Dropping an Engine kills its child, and the child exits on EOF, but
+        // neither survives a SIGKILL of this process: Drop never runs, and a
+        // page spinning in synchronous JavaScript never reaches an event-loop
+        // turn where it could notice the pipe closed. Orphans were found at
+        // 100% CPU each, long after every renderer had gone. PR_SET_PDEATHSIG
+        // makes the kernel do it, whatever the page is doing.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            command.pre_exec(|| {
+                // SIGKILL rather than SIGTERM: a wedged engine cannot handle
+                // a signal it would have to reach an event loop to see.
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // The parent may already have died between fork and here, in
+                // which case the death signal has been missed.
+                if libc::getppid() == 1 {
+                    libc::_exit(0);
+                }
+                Ok(())
+            });
+        }
+
+        let mut child = command.spawn()?;
 
         let stdin = child
             .stdin

@@ -52,14 +52,20 @@
         # Only the Rust half of the tree. With `src = ./.` a one-line edit to
         # the TypeScript shell changed the source hash and rebuilt Stylo,
         # which is ten minutes for nothing.
+        # Everything under packages/ except the TypeScript shell.
+        #
+        # Listing the Rust crates by hand meant adding one to the workspace
+        # and forgetting it here, which builds fine in the dev shell — the
+        # whole tree is present — and fails in the sandbox with a missing
+        # Cargo.toml. Subtracting the shell instead keeps the property that
+        # matters (a TypeScript edit does not rebuild Stylo) without needing
+        # to be updated for every new crate.
         rustSource = pkgs.lib.fileset.toSource {
           root = ./.;
           fileset = pkgs.lib.fileset.unions [
             ./Cargo.toml
             ./Cargo.lock
-            ./packages/protocol
-            ./packages/render-webkit
-            ./packages/render-blitz
+            (pkgs.lib.fileset.difference ./packages ./packages/shell)
           ];
         };
 
