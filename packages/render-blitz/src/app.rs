@@ -878,6 +878,11 @@ impl BunsenApp {
                     eprintln!("bunsen-js [{}] error in {}: {}", env.tab, stage, message);
                 }
                 JsMsg::Navigate(url) => self.navigate(env.tab, url, true),
+                JsMsg::Download { url, filename } => self.emit(Event::DownloadRequest {
+                    id: env.tab,
+                    url,
+                    filename,
+                }),
                 JsMsg::Page(payload) => {
                     self.emit(Event::PageEvent {
                         id: env.tab,

@@ -50,6 +50,7 @@ pub mod ev {
     pub const PAGE_EVENT: u16 = 12;
     pub const BOOKMARK_REQUEST: u16 = 13;
     pub const NAVIGATE_REQUEST: u16 = 14;
+    pub const DOWNLOAD_REQUEST: u16 = 15;
 }
 
 /// A batch holding a single AppQuit, which the ABI's stop path needs to send
@@ -239,6 +240,12 @@ pub fn encode_events(events: &[Event]) -> Vec<u8> {
                 w.u16(ev::PAGE_EVENT);
                 w.u32(*id);
                 w.str(payload);
+            }
+            Event::DownloadRequest { id, url, filename } => {
+                w.u16(ev::DOWNLOAD_REQUEST);
+                w.u32(*id);
+                w.str(url);
+                w.str(filename);
             }
             Event::NavigateRequest { id, text } => {
                 w.u16(ev::NAVIGATE_REQUEST);

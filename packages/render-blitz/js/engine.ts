@@ -14,6 +14,7 @@
  *   out: {t:"console", level, text}
  *   out: {t:"error", stage, message}
  *   out: {t:"navigate", url}
+ *   out: {t:"download", url, filename}
  *   out: {t:"page", payload}             message toward the extension host
  *
  * The DOM here is a plain tree of records. When it changes we serialize the
@@ -86,7 +87,7 @@ function parseHTML(html: string): Node {
   const pushText = (s: string): void => {
     if (!s) return;
     const t = makeNode("text");
-    t.text = s;
+    t.text = decodeEntities(s);
     t.parent = cur;
     cur.children.push(t);
   };
@@ -143,8 +144,9 @@ function parseHTML(html: string): Node {
         html.slice(j),
       );
       if (!am || !am[1]) break;
-      el.attrs[am[1].toLowerCase()] =
-        am[2] ?? am[3] ?? am[4] ?? "";
+      // Attribute values are entity-decoded too: href="?a=1&amp;b=2" must
+      // become a URL with a single ampersand, or every query string breaks.
+      el.attrs[am[1].toLowerCase()] = decodeEntities(am[2] ?? am[3] ?? am[4] ?? "");
       j += am[0].length;
     }
 
@@ -161,7 +163,8 @@ function parseHTML(html: string): Node {
       if (tag === "textarea" || tag === "title") {
         if (rawEnd > i) {
           const t = makeNode("text");
-          t.text = html.slice(i, rawEnd);
+          // RCDATA: entities are decoded here, markup is not parsed.
+          t.text = decodeEntities(html.slice(i, rawEnd));
           t.parent = el;
           el.children.push(t);
         }
@@ -179,6 +182,60 @@ function parseHTML(html: string): Node {
 }
 
 // --------------------------------------------------------------- serializer
+
+/**
+ * Named entities worth knowing by heart.
+ *
+ * The full HTML entity table is ~2200 names; this is the set that actually
+ * shows up in markup, plus everything the serializer can emit so a
+ * parse/serialize round trip is lossless. Anything unlisted is left as
+ * written, which renders as the literal text rather than guessing wrong.
+ */
+const ENTITIES: Record<string, string> = {
+  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\u00a0",
+  copy: "\u00a9", reg: "\u00ae", trade: "\u2122", hellip: "\u2026",
+  mdash: "\u2014", ndash: "\u2013", lsquo: "\u2018", rsquo: "\u2019",
+  ldquo: "\u201c", rdquo: "\u201d", bull: "\u2022", dagger: "\u2020",
+  laquo: "\u00ab", raquo: "\u00bb", deg: "\u00b0", plusmn: "\u00b1",
+  times: "\u00d7", divide: "\u00f7", frac12: "\u00bd", middot: "\u00b7",
+  sect: "\u00a7", para: "\u00b6", euro: "\u20ac", pound: "\u00a3",
+  yen: "\u00a5", cent: "\u00a2", sup2: "\u00b2", sup3: "\u00b3",
+  larr: "\u2190", rarr: "\u2192", harr: "\u2194", darr: "\u2193",
+  uarr: "\u2191", infin: "\u221e", ne: "\u2260", le: "\u2264", ge: "\u2265",
+  shy: "\u00ad", ensp: "\u2002", emsp: "\u2003", thinsp: "\u2009",
+  zwnj: "\u200c", zwj: "\u200d",
+};
+
+/**
+ * Turn entity references into the characters they stand for.
+ *
+ * This has to happen at parse time, because the DOM holds text, not markup:
+ * without it `&nbsp;` survives as five literal characters and the serializer
+ * then escapes its ampersand, so the page displays "&nbsp;" — which is
+ * exactly what every entity on Hacker News looked like.
+ */
+function decodeEntities(s: string): string {
+  if (!s.includes("&")) return s;
+  return s.replace(/&(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]{1,31});/g, (whole, body) => {
+    if (body[0] === "#") {
+      const code =
+        body[1] === "x" || body[1] === "X"
+          ? Number.parseInt(body.slice(2), 16)
+          : Number.parseInt(body.slice(1), 10);
+      // Surrogates and out-of-range values are not characters; leaving the
+      // reference alone beats emitting a replacement char.
+      if (!Number.isFinite(code) || code <= 0 || code > 0x10ffff) return whole;
+      if (code >= 0xd800 && code <= 0xdfff) return whole;
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return whole;
+      }
+    }
+    const named = ENTITIES[body];
+    return named === undefined ? whole : named;
+  });
+}
 
 function escText(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -774,7 +831,49 @@ function dispatchOn(target: Node, ev: any, owner: Doc): boolean {
 
   ev.eventPhase = 0;
   ev.currentTarget = null;
+
+  runDefaultAction(target, ev);
   return !ev.defaultPrevented;
+}
+
+/**
+ * The activation behaviour the spec attaches to elements after dispatch.
+ *
+ * Only anchors so far, and only navigation: a scripted `a.click()` is how a
+ * great many sites move you between pages, and without this the click fired
+ * listeners and then did nothing at all. A real pointer click on the rendered
+ * page is handled by Blitz's own DOM and never reaches here.
+ *
+ * Navigation policy still belongs to the shell — this reports the intent the
+ * same way a link click from the renderer does, rather than loading anything
+ * itself.
+ */
+function runDefaultAction(target: Node, ev: any): void {
+  if (ev.type !== "click" || ev.defaultPrevented) return;
+
+  for (let n: Node | null = target; n; n = n.parent) {
+    if (n.kind !== "el" || n.tag !== "a") continue;
+    const href = n.attrs.href;
+    // An anchor without href is not a link; `javascript:` URLs are script we
+    // deliberately do not run from a navigation.
+    if (!href || /^javascript:/i.test(href.trim())) return;
+    // `download` means save it, not show it. The attribute's value is the
+    // suggested filename and may be empty, in which case the shell decides.
+    if ("download" in n.attrs) {
+      try {
+        line({
+          t: "download",
+          url: new URL(href, locationUrl).href,
+          filename: String(n.attrs.download ?? ""),
+        });
+      } catch (e) {
+        report("download", e);
+      }
+      return;
+    }
+    navigateTo(href);
+    return;
+  }
 }
 
 class CustomEvent extends Event {}

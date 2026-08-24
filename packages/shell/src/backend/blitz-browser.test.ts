@@ -113,14 +113,10 @@ test.skipIf(headless)("history goes back and forward", async () => {
 }, 60_000);
 
 /**
- * GAP: a synthetic `a.click()` from script does not navigate.
- *
- * The engine dispatches the click event but implements no default action for
- * anchors, so nothing tells the renderer to load the href. A real pointer
- * click is handled by Blitz's own DOM and does navigate; only the scripted
- * path is missing, and that path is how a lot of sites move you around.
+ * A scripted `a.click()` must navigate, not merely fire listeners: it is how
+ * a great many sites move you between pages.
  */
-test.todo("clicking a link from script navigates through the shell", async () => {
+test.skipIf(headless)("clicking a link from script navigates", async () => {
   // Blitz hands link clicks to the embedder rather than following them, so
   // this proves the navigation policy path, not just the DOM.
   const server = Bun.serve({
@@ -153,6 +149,95 @@ test.todo("clicking a link from script navigates through the shell", async () =>
       seen.some((e) => e.ev === "tab_url" && e.url.includes("/target")),
   );
   expect(followed).toBe(true);
+
+  server.stop(true);
+}, 60_000);
+
+test.skipIf(headless)("a download link saves the file instead of navigating", async () => {
+  // The renderer only reports the intent; the shell owns where files land and
+  // what they are called. This proves both halves.
+  const { mkdtempSync, existsSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "bunsen-dl-"));
+
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(req) {
+      if (new URL(req.url).pathname === "/file.txt") {
+        return new Response("saved-by-bunsen", { headers: { "content-type": "text/plain" } });
+      }
+      return new Response(
+        `<title>dl</title><body><a id="d" href="/file.txt" download="grabbed.txt">get</a>
+         <script>document.getElementById("d").click()</script></body>`,
+        { headers: { "content-type": "text/html" } },
+      );
+    },
+  });
+
+  const { Downloads } = await import("../downloads");
+  const downloads = new Downloads(":memory:", dir);
+
+  const { backend, seen } = await renderer();
+  backend.onEvent((ev) => {
+    if (ev.ev !== "download_request") return;
+    void downloads
+      .start(ev.url, ev.filename ? { filename: ev.filename } : {})
+      .then((d) => downloads.settled(d.id));
+  });
+
+  backend.send({ op: "tab_create", id: 42, url: `http://127.0.0.1:${server.port}/` });
+  backend.send({ op: "tab_activate", id: 42 });
+  backend.flush();
+
+  const asked = await waitFor(() => seen.some((e) => e.ev === "download_request"));
+  expect(asked).toBe(true);
+
+  const saved = join(dir, "grabbed.txt");
+  expect(await waitFor(() => existsSync(saved), 15_000)).toBe(true);
+  expect(readFileSync(saved, "utf8")).toBe("saved-by-bunsen");
+
+  // The tab must NOT have navigated away to the file.
+  expect(seen.some((e) => e.ev === "tab_url" && e.url.endsWith("/file.txt"))).toBe(false);
+
+  downloads.close();
+  server.stop(true);
+}, 60_000);
+
+test.skipIf(headless)("HTML entities are decoded, not shown literally", async () => {
+  // The DOM holds text, not markup. Without decoding at parse time the
+  // serializer escapes the ampersand again and the page shows "&nbsp;" — the
+  // state every entity on a real page was in.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () =>
+      new Response(
+        `<title>t</title><body><p id="p">a&nbsp;b &amp; c &#x2F; d &#39;e&#39; &quot;f&quot;</p>
+         <a id="l" href="/x?a=1&amp;b=2">l</a>
+         <script>
+           var p = document.getElementById("p").textContent;
+           var href = document.getElementById("l").getAttribute("href");
+           document.title = "ent:" +
+             (p.indexOf("&") === p.lastIndexOf("&") ? "amp=ok" : "amp=FAIL") + " " +
+             (p.indexOf("nbsp") === -1 ? "nbsp=ok" : "nbsp=FAIL") + " " +
+             (p.indexOf("/") !== -1 ? "slash=ok" : "slash=FAIL") + " " +
+             (p.indexOf("'e'") !== -1 ? "apos=ok" : "apos=FAIL") + " " +
+             (p.indexOf('"f"') !== -1 ? "quot=ok" : "quot=FAIL") + " " +
+             (href === "/x?a=1&b=2" ? "href=ok" : "href=FAIL<" + href + ">");
+         </script></body>`,
+        { headers: { "content-type": "text/html" } },
+      ),
+  });
+
+  const { backend, seen } = await renderer();
+  backend.send({ op: "tab_create", id: 55, url: `http://127.0.0.1:${server.port}/` });
+  backend.send({ op: "tab_activate", id: 55 });
+  backend.flush();
+
+  const reported = () => titles(seen).find((t) => t.startsWith("ent:"));
+  expect(await waitFor(() => reported() !== undefined)).toBe(true);
+  expect(reported()).toBe("ent:amp=ok nbsp=ok slash=ok apos=ok quot=ok href=ok");
 
   server.stop(true);
 }, 60_000);

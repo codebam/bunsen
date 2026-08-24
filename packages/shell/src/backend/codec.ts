@@ -40,6 +40,7 @@ export const EV = {
   12: "page_event",
   13: "bookmark_request",
   14: "navigate_request",
+  15: "download_request",
 } as const;
 
 const utf8 = new TextEncoder();
@@ -256,6 +257,14 @@ export function decodeEvents(bytes: Uint8Array): BackendEvent[] {
       case 14:
         out.push({ ev: "navigate_request", id: r.u32(), text: r.str() });
         break;
+      case 15:
+        out.push({
+          ev: "download_request",
+          id: r.u32(),
+          url: r.str(),
+          filename: r.str(),
+        });
+        break;
       case 11:
         out.push({ ev: "tab_close_request", id: r.u32() });
         break;
@@ -267,6 +276,14 @@ export function decodeEvents(bytes: Uint8Array): BackendEvent[] {
         break;
       case 14:
         out.push({ ev: "navigate_request", id: r.u32(), text: r.str() });
+        break;
+      case 15:
+        out.push({
+          ev: "download_request",
+          id: r.u32(),
+          url: r.str(),
+          filename: r.str(),
+        });
         break;
       default:
         // No per-message length prefix means no way to skip an unknown

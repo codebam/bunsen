@@ -168,6 +168,13 @@ pub enum Event {
         id: TabId,
         text: String,
     },
+    /// A link asked to be saved rather than followed (`<a download>`).
+    /// The shell owns the download directory and the naming policy.
+    DownloadRequest {
+        id: TabId,
+        url: String,
+        filename: String,
+    },
     BookmarkRequest {
         id: TabId,
     },

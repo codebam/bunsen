@@ -44,7 +44,8 @@ export type BackendEvent =
   | { ev: "tab_close_request"; id: TabId }
   | { ev: "page_event"; id: TabId; payload: string }
   | { ev: "bookmark_request"; id: TabId }
-  | { ev: "navigate_request"; id: TabId; text: string };
+  | { ev: "navigate_request"; id: TabId; text: string }
+  | { ev: "download_request"; id: TabId; url: string; filename: string };
 
 export interface BackendConfig {
   chrome_url: string;

@@ -17,6 +17,7 @@ import { ExtensionHost } from "./extensions/registry";
 import { extensionIdFromUrl, install as installFromStore } from "./extensions/webstore";
 import { Bookmarks } from "./bookmarks";
 import { History } from "./history";
+import { Downloads } from "./downloads";
 import { Session } from "./session";
 import { resolve as resolveOmnibox } from "./omnibox";
 import { TabStore } from "./tabs";
@@ -63,6 +64,10 @@ const EXTENSIONS_DIR = Bun.env.BUNSEN_EXTENSIONS_DIR ?? join(PROFILE, "extension
 const history = new History(join(PROFILE, "history.db"));
 const bookmarks = new Bookmarks(join(PROFILE, "bookmarks.db"));
 const session = new Session(join(PROFILE, "session.json"));
+const DOWNLOAD_DIR =
+  Bun.env.BUNSEN_DOWNLOAD_DIR ??
+  join(Bun.env.HOME ?? ".", "Downloads");
+const downloads = new Downloads(join(PROFILE, "downloads.db"), DOWNLOAD_DIR);
 const tabs = new TabStore();
 const chromeSockets = new Set<ServerWebSocket<unknown>>();
 
@@ -356,6 +361,27 @@ function onBackendEvent(ev: BackendEvent): void {
       pushState();
       return;
     }
+    case "download_request": {
+      const suggested = ev.filename.trim();
+      backend.send({ op: "status", text: `Downloading ${suggested || ev.url}…` });
+      void downloads
+        .start(ev.url, suggested ? { filename: suggested } : {})
+        .then(async (started) => {
+          const finished = await downloads.settled(started.id);
+          backend.send({
+            op: "status",
+            text:
+              finished.state === "complete"
+                ? `Saved ${finished.filename}`
+                : `Download ${finished.state}: ${finished.error ?? finished.filename}`,
+          });
+        })
+        .catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          backend.send({ op: "status", text: `Download failed: ${message}` });
+        });
+      return;
+    }
     case "page_event":
       void onPageEvent(ev.id, ev.payload);
       return;
@@ -472,6 +498,7 @@ function shutdown(): void {
   extensionHost.stop();
   // The debounce timer is unref'd, so without this the last change is lost.
   session.flush();
+  downloads.close();
   bookmarks.close();
   backend.flush();
   backend.stop();

@@ -45,6 +45,11 @@ pub enum JsMsg {
         message: String,
     },
     Navigate(String),
+    /// `<a download>`: save the target rather than showing it.
+    Download {
+        url: String,
+        filename: String,
+    },
     /// An opaque payload for the extension host (already JSON).
     Page(String),
 }
@@ -326,6 +331,10 @@ fn parse_msg(line: &str) -> Result<JsMsg, String> {
             message: s("message").to_owned(),
         },
         "navigate" => JsMsg::Navigate(s("url").to_owned()),
+        "download" => JsMsg::Download {
+            url: s("url").to_owned(),
+            filename: s("filename").to_owned(),
+        },
         // Forward just the inner payload; the envelope is ours, not the
         // extension host's business.
         "page" => JsMsg::Page(

@@ -4,6 +4,15 @@
 
 use blitz_traits::net::Request;
 
+// The user agent is NOT ours to set today.
+//
+// blitz-net hardcodes "Firefox/81.0" (a 2020 build) and appends it after any
+// headers we supply, so a User-Agent we insert here is sent as a second
+// header rather than replacing theirs. Enough of the web gates on this that
+// it matters — YouTube redirects that string straight to /supported_browsers,
+// which is exactly what we see. Fixing it properly means patching blitz-net
+// to make the agent configurable; setting it here only looks like a fix.
+
 /// Fetch a document over Blitz's net provider. Returns the final URL (after
 /// redirects) and the body.
 ///
@@ -14,10 +23,13 @@ pub async fn document(
     net: &blitz_net::Provider,
     url: url::Url,
 ) -> Result<(String, String), String> {
-    let (final_url, bytes) = net
-        .fetch_async(Request::get(url))
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut request = Request::get(url);
+    // This one does stick: blitz-net sets no Accept-Language of its own.
+    if let Ok(value) = "en-US,en;q=0.9".parse() {
+        request.headers.insert("accept-language", value);
+    }
+
+    let (final_url, bytes) = net.fetch_async(request).await.map_err(|e| e.to_string())?;
     let body = String::from_utf8_lossy(bytes.as_ref()).into_owned();
     Ok((final_url, body))
 }
